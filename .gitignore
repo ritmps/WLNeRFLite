@@ -1,0 +1,21 @@
+# Wolfram Language / Mathematica
+*.nb~
+*.bak
+*~
+*.wlnet
+*.wxf
+.DS_Store
+
+# Output directories & caches
+checkpoints/
+output/
+renders/
+cache/
+__pycache__/
+.cache/
+*.log
+
+# NeRF data caches (keep scripts and tests, ignore raw bulk renders)
+*.exr
+*.npy
+*.npz
