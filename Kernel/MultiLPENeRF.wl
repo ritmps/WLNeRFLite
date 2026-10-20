@@ -73,14 +73,15 @@ parseEXRVec[headerText_String, key_String] := Module[{match, vec},
 Options[LoadRenderManMultiLPEView] = {
   "FOV" -> Automatic,
   "CameraMatrix" -> Automatic,
-  "ClipRGB" -> True
+  "ClipRGB" -> True,
+  "NormalSpace" -> "World"
 };
 
 LoadRenderManMultiLPEView[path_String, opts : OptionsPattern[]] := Module[{
   hdr, w2c, eye, at, up, fov,
   albData, lightData, defData, geomData,
   w, h,
-  albRGB, diffDirRGB, diffIndRGB, specDirRGB, specIndRGB, beautyRGB, normalXYZ, alpha,
+  albRGB, diffDirRGB, diffIndRGB, specDirRGB, specIndRGB, beautyRGB, normalXYZ, normalCamXYZ, alpha,
   toRGB3, dist, suggestedBounds
 },
   If[!FileExistsQ[path],
@@ -182,8 +183,8 @@ LoadRenderManMultiLPEView[path_String, opts : OptionsPattern[]] := Module[{
     If[KeyExistsQ[defData, "a"], Developer`ToPackedArray @ N @ Normal[defData["a"]], None]
   ];
 
-  (* Extract Normal *)
-  normalXYZ = If[KeyExistsQ[geomData, "Nn.x"],
+  (* Extract Normal (RenderMan Camera Space) *)
+  normalCamXYZ = If[KeyExistsQ[geomData, "Nn.x"],
     toRGB3[geomData["Nn.x"], geomData["Nn.y"], geomData["Nn.z"]],
     None
   ];
@@ -191,14 +192,17 @@ LoadRenderManMultiLPEView[path_String, opts : OptionsPattern[]] := Module[{
   {h, w} = If[beautyRGB =!= None, Dimensions[beautyRGB][[1 ;; 2]], {512, 512}];
 
   (* Compute Screen-Space Weingarten ShapeIndex & Curvedness if P and Nn exist *)
-  Module[{posXYZ, maskHW, pu, pv, nu, nv, e, f, g, l, m, nCoeff, detI, validDet, invDetI, w11, w12, w21, w22, trW, detW, sqrtDisc, k1, k2, dk, sk, validK, shapeHW, curvHW},
+  Module[{posXYZ, maskHW, signFlip, pu, pv, nu, nv, e, f, g, l, m, nCoeff, detI, validDet, invDetI, w11, w12, w21, w22, trW, detW, sqrtDisc, k1, k2, dk, sk, validK, shapeHW, curvHW},
     posXYZ = If[KeyExistsQ[geomData, "P.x"],
       toRGB3[geomData["P.x"], geomData["P.y"], geomData["P.z"]],
       None
     ];
-    If[posXYZ =!= None && normalXYZ =!= None,
+    If[posXYZ =!= None && normalCamXYZ =!= None,
+      (* Enforce outward camera-facing orientation: faceforward(Nn, P) *)
+      signFlip = 1.0 - 2.0 * UnitStep[Total[posXYZ * normalCamXYZ, {3}]];
+      normalCamXYZ = Developer`ToPackedArray[N[normalCamXYZ * Transpose[ConstantArray[signFlip, 3], {3, 1, 2}]]];
       maskHW = If[alpha =!= None, UnitStep[alpha - 0.05], ConstantArray[1.0, {h, w}]];
-      Module[{pSmooth = GaussianFilter[posXYZ, 1.0], nSmooth = GaussianFilter[normalXYZ, 1.0]},
+      Module[{pSmooth = GaussianFilter[posXYZ, 1.0], nSmooth = GaussianFilter[normalCamXYZ, 1.0]},
         pu = DerivativeFilter[pSmooth, {1, 0}];
         pv = DerivativeFilter[pSmooth, {0, 1}];
         nu = DerivativeFilter[nSmooth, {1, 0}];
@@ -231,6 +235,12 @@ LoadRenderManMultiLPEView[path_String, opts : OptionsPattern[]] := Module[{
       curvHW = ConstantArray[0.0, {h, w}];
     ];
 
+    (* Transform camera-space Nn into World Space via Transpose[w2c[[1;;3, 1;;3]]] *)
+    normalXYZ = If[normalCamXYZ =!= None && OptionValue["NormalSpace"] === "World",
+      Developer`ToPackedArray[N[normalCamXYZ . Transpose[w2c[[1 ;; 3, 1 ;; 3]]]]],
+      normalCamXYZ
+    ];
+
     <|
       "CameraMatrix" -> Developer`ToPackedArray[N[w2c]],
       "FOV" -> N[fov],
@@ -246,6 +256,7 @@ LoadRenderManMultiLPEView[path_String, opts : OptionsPattern[]] := Module[{
       "IndirectSpecular" -> specIndRGB,
       "Beauty" -> beautyRGB,
       "Normal" -> normalXYZ,
+      "NormalCamera" -> normalCamXYZ,
       "ShapeIndex" -> Developer`ToPackedArray[N @ ArrayReshape[shapeHW, {h, w, 1}]],
       "Curvedness" -> Developer`ToPackedArray[N @ ArrayReshape[curvHW, {h, w, 1}]],
       "Alpha" -> alpha,
