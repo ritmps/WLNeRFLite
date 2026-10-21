@@ -98,10 +98,10 @@ fi
 WOLFRAM_BIN=""
 if command -v wolframscript >/dev/null 2>&1; then
   WOLFRAM_BIN="wolframscript"
-elif [ -x "/Applications/Wolfram 15.1.app/Contents/MacOS/wolfram" ]; then
-  WOLFRAM_BIN="/Applications/Wolfram 15.1.app/Contents/MacOS/wolfram"
 elif [ -x "/Applications/Wolfram.app/Contents/MacOS/wolfram" ]; then
   WOLFRAM_BIN="/Applications/Wolfram.app/Contents/MacOS/wolfram"
+elif [ -x "/Applications/Mathematica.app/Contents/MacOS/wolfram" ]; then
+  WOLFRAM_BIN="/Applications/Mathematica.app/Contents/MacOS/wolfram"
 else
   echo "Error: Neither wolframscript nor wolfram binary was found on PATH or /Applications."
   exit 1

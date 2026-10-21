@@ -77,40 +77,87 @@ Module[{
     ]
   ];
 
+  formatSignatureBoxes[sig_String] := Module[{held, boxes, symHead},
+    symHead = First[StringCases[sig, RegularExpression["^[A-Za-z0-9`]+"]]];
+    held = Quiet @ Check[ToExpression[sig, InputForm, HoldComplete], Null];
+    If[held =!= Null && MatchQ[held, HoldComplete[_[___]]],
+      boxes = MakeBoxes @@ held;
+      boxes = boxes /. s_String /; StringMatchQ[s, RegularExpression["[a-zA-Z][a-zA-Z0-9]*"]] && s =!= symHead && s =!= "List" && s =!= "Rule" && s =!= "Automatic" && s =!= "True" && s =!= "False" :> StyleBox[s, "TI"];
+      boxes
+    ,
+      sig
+    ]
+  ];
+
+  formatUsageCell[uText_String] := Module[{lines, gridRows},
+    lines = Select[StringSplit[uText, "\n"], StringLength[StringTrim[#]] > 0 &];
+    gridRows = Map[
+      Function[{line},
+        Module[{trimmed = StringTrim[line], parsed, sig, desc, sigBox},
+          parsed = StringCases[trimmed, RegularExpression["(?s)^([A-Za-z0-9`]+(?:\\[[^\\]]*\\])?)\\s+(.*)$"] -> {"$1", "$2"}];
+          If[Length[parsed] > 0,
+            sig = parsed[[1, 1]];
+            desc = parsed[[1, 2]];
+            sigBox = formatSignatureBoxes[sig];
+            {"", Cell[TextData[{Cell[BoxData[sigBox], "InlineFormula"], " ", desc}]]}
+          ,
+            {"", Cell[TextData[{trimmed}]]}
+          ]
+        ]
+      ],
+      lines
+    ];
+    Cell[BoxData[GridBox[gridRows]], "Usage"]
+  ];
+
   createDocNotebook[symName_String, usageInput_, ctx_String, opts_List, seeAlsoList_List] := Module[
-    {notesCells, seeAlsoCells, optionsTable, nbPath, usageText = ToString[usageInput]},
+    {notesCells, seeAlsoCell, moreAboutCell, optionsRows, optionsTable, nbPath, usageText = ToString[usageInput]},
 
     If[opts =!= {},
-      optionsTable = Cell[BoxData[
-        GridBox[
-          Prepend[
-            Map[{StyleBox[ToString[First[#]], "InlineFormula"], StyleBox[ToString[Last[#]], "InlineFormula"]}&, opts],
-            {StyleBox["Option", FontWeight -> "Bold"], StyleBox["Default Value", FontWeight -> "Bold"]}
-          ],
-          GridBoxDividers -> {"Columns" -> {{False}}, "Rows" -> {False, True, {False}}},
-          GridBoxSpacings -> {"Columns" -> {{2}}, "Rows" -> {{0.8}}}
-        ]
-      ], "TableText"];
+      optionsRows = Map[
+        Function[{opt},
+          {
+            "",
+            Cell[BoxData[StyleBox[ToString[First[opt]], "InlineFormula"]]],
+            Cell[BoxData[StyleBox[ToString[Last[opt]], "InlineFormula"]]]
+          }
+        ],
+        opts
+      ];
+      optionsTable = Cell[BoxData[GridBox[optionsRows]], "2ColumnTableMod"];
       notesCells = {
-        Cell["The following options can be given:", "NotesText"],
+        Cell["The following options can be given:", "Notes"],
         optionsTable
       };
     ,
       notesCells = {
-        Cell["Details and options for " <> symName <> ".", "NotesText"]
+        Cell[symName <> " has no options.", "Notes"]
       };
     ];
 
-    seeAlsoCells = If[Length[seeAlsoList] > 0,
-      Cell[BoxData[
-        RowBox[Riffle[
-          Map[TemplateBox[{Cell[TextData[#]], "paclet:WLNeRFLite/ref/" <> #}, "RefLink", BaseStyle -> {"InlineFormula"}]&, seeAlsoList],
-          " \[DoubleLongRightArrow] "
-        ]]
-      ], "SeeAlsoText"]
+    seeAlsoCell = If[Length[seeAlsoList] > 0,
+      Cell[TextData[
+        Riffle[
+          Map[
+            Function[{s},
+              Cell[BoxData[TemplateBox[{Cell[TextData[s]], "paclet:WLNeRFLite/ref/" <> s}, "RefLink", BaseStyle -> {"InlineFormula"}]]]
+            ],
+            seeAlsoList
+          ],
+          " \[FilledSmallSquare] "
+        ]
+      ], "SeeAlso"]
     ,
-      Cell[BoxData[RowBox[{StyleBox["WLNeRFLite", "InlineFormula"]}]], "SeeAlsoText"]
+      Cell[TextData[{
+        Cell[BoxData[TemplateBox[{Cell[TextData["WLNeRFLite Guide"]], "paclet:WLNeRFLite/guide/WLNeRFLite"}, "RefLink", BaseStyle -> {"InlineFormula"}]]]
+      }], "SeeAlso"]
     ];
+
+    moreAboutCell = Cell[TextData[{
+      Cell[BoxData[
+        TemplateBox[{Cell[TextData["WLNeRFLite Guide"]], "paclet:WLNeRFLite/guide/WLNeRFLite"}, "RefLink", BaseStyle -> {"MoreAbout"}]
+      ]]
+    }], "MoreAbout"];
 
     nbPath = FileNameJoin[{docRootDir, symName <> ".nb"}];
     Export[nbPath,
@@ -125,13 +172,7 @@ Module[{
 
         Cell[CellGroupData[{
           Cell[symName, "ObjectName"],
-          Cell[BoxData[
-            RowBox[{
-              StyleBox[symName, "UsageSymbol"],
-              " ",
-              usageText
-            }]
-          ], "Usage"],
+          formatUsageCell[usageText],
 
           Cell[CellGroupData[Join[{Cell["Details and Options", "NotesSection"]}, notesCells], Closed]],
 
@@ -139,20 +180,19 @@ Module[{
             Cell["Examples", "PrimaryExamplesSection"],
             Cell[CellGroupData[{
               Cell["Basic Examples", "ExampleSection"],
+              Cell["Load the WLNeRFLite package:", "ExampleText"],
               Cell[BoxData[RowBox[{"Needs", "[", "\"WLNeRFLite`\"", "]"}]], "Input"]
             }, Open]]
           }, Open]],
 
           Cell[CellGroupData[{
             Cell["See Also", "SeeAlsoSection"],
-            seeAlsoCells
+            seeAlsoCell
           }, Open]],
 
           Cell[CellGroupData[{
             Cell["Related Guides", "MoreAboutSection"],
-            Cell[BoxData[
-              TemplateBox[{Cell[TextData["WLNeRFLite Guide"]], "paclet:WLNeRFLite/guide/WLNeRFLite"}, "RefLink", BaseStyle -> {"MoreAbout"}]
-            ], "MoreAboutText"]
+            moreAboutCell
           }, Open]]
         }, Open]]
       },
@@ -192,13 +232,19 @@ Module[{
         Module[{subTitle = subsec[[1]], symList = subsec[[2]], funcCells},
           funcCells = Map[
             Function[{sName},
-              Module[{uText = Lookup[curatedUsages, sName, sName <> " function"], shortDesc},
+              Module[{uText = Lookup[curatedUsages, sName, sName <> " function"], shortDesc, parsed, cleanDesc},
                 shortDesc = First[StringSplit[uText, ". "]];
                 If[!StringEndsQ[shortDesc, "."], shortDesc = shortDesc <> "."];
+                parsed = StringCases[shortDesc, RegularExpression["(?s)^[A-Za-z0-9`]+(?:\\[[^\\]]*\\])?\\s+(.*)$"] -> "$1"];
+                cleanDesc = If[Length[parsed] > 0,
+                  ToUpperCase[StringTake[parsed[[1]], 1]] <> StringDrop[parsed[[1]], 1]
+                ,
+                  shortDesc
+                ];
                 Cell[TextData[{
                   Cell[BoxData[TemplateBox[{Cell[TextData[sName]], "paclet:WLNeRFLite/ref/" <> sName}, "RefLink", BaseStyle -> {"InlineFormula"}]]],
                   " \[LongDash] ",
-                  shortDesc
+                  cleanDesc
                 }], "GuideText"]
               ]
             ],
@@ -256,13 +302,13 @@ Module[{
           shortName = Last[StringSplit[sym, "`"]],
           usage, symObj, optsList, seeAlso
         },
-          symObj = ToExpression[pkg <> shortName, InputForm, Unevaluated];
+          symObj = ToExpression[pkg <> shortName];
           usage = Which[
             KeyExistsQ[curatedUsages, shortName], curatedUsages[shortName],
             StringQ[Quiet @ MessageName[symObj, "usage"]], MessageName[symObj, "usage"],
             True, shortName <> "[...] evaluates " <> shortName <> "."
           ];
-          optsList = Quiet @ Check[Options[symObj], {}];
+          optsList = Quiet @ Check[DeleteDuplicatesBy[Options[symObj], First], {}];
           seeAlso = getSeeAlso[shortName];
 
           createDocNotebook[shortName, usage, pkg, optsList, seeAlso];
