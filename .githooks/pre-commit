@@ -24,13 +24,21 @@ except Exception:
 with open(paclet_info, "r", encoding="utf-8") as f:
     content = f.read()
 
-if '"BuildNumber"' in content:
-    new_content = re.sub(r'"BuildNumber"\s*->\s*"[^"]*"', f'"BuildNumber" -> "{build_num}"', content)
+# Update "Version" -> "major.minor.<build_num>"
+ver_pattern = r'"Version"\s*->\s*"(\d+)\.(\d+)(?:\.\d+)?"'
+ver_repl = f'"Version" -> "\\g<1>.\\g<2>.{build_num}"'
+new_content = re.sub(ver_pattern, ver_repl, content)
+
+# Also update "BuildNumber"
+if '"BuildNumber"' in new_content:
+    new_content = re.sub(r'"BuildNumber"\s*->\s*"[^"]*"', f'"BuildNumber" -> "{build_num}"', new_content)
 else:
-    new_content = re.sub(r'("Version"\s*->\s*"[^"]*",)', rf'\1\n    "BuildNumber" -> "{build_num}",', content)
+    new_content = re.sub(r'("Version"\s*->\s*"[^"]*",)', rf'\1\n    "BuildNumber" -> "{build_num}",', new_content)
 
 if new_content != content:
     with open(paclet_info, "w", encoding="utf-8") as f:
         f.write(new_content)
     subprocess.run(["git", "add", paclet_info], cwd=repo_root)
-    print(f"[hook] Set PacletInfo.wl BuildNumber -> \"{build_num}\"")
+    m = re.search(r'"Version"\s*->\s*"([^"]*)"', new_content)
+    ver_str = m.group(1) if m else build_num
+    print(f"[hook] Bumped PacletInfo.wl: Version -> \"{ver_str}\" (Build {build_num})")
