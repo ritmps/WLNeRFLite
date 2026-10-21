@@ -19,6 +19,7 @@ PacletObject[
       },
       {
         "Documentation",
+        "Root" -> "Documentation",
         "Language" -> "English",
         "MainPage" -> "Guides/WLNeRFLite"
       }

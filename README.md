@@ -5,7 +5,7 @@
 [![RenderMan](https://img.shields.io/badge/RenderMan-27%2F28_EXR-blue.svg)](#renderman-exr-support)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**`WLNeRFLite`** is a standalone, high-performance, ultra-lightweight Neural Radiance Field (NeRF) framework implemented natively in Wolfram Language. It is designed to train coordinate MLPs at blistering speeds (>25,000 rays/second on GPU) on both **standard NeRF synthetic datasets** (`transforms.json` with PNG/JPG/TIFF images) and **Pixar RenderMan OpenEXR** archives.
+**`WLNeRFLite`** is a standalone, high-performance, ultra-lightweight Neural Radiance Field (NeRF) framework implemented natively in Wolfram Language. It is designed to train coordinate MLPs at high speeds (>25,000 rays/second on GPU) on both **standard NeRF synthetic datasets** (`transforms.json` with PNG/JPG/TIFF images) and **Pixar RenderMan OpenEXR** archives.
 
 ---
 
