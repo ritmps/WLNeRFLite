@@ -183,3 +183,19 @@ VerificationTest[
   True,
   TestID -> "NeRFLite-VisualizeCameraRig"
 ]
+
+(* 10. NeRF Synthetic Lego Dataset Loader Test *)
+VerificationTest[
+  legoDir = FileNameJoin[{DirectoryName[$TestFileName, 2], "data", "lego"}];
+  If[DirectoryQ[legoDir] && FileExistsQ[FileNameJoin[{legoDir, "transforms_train.json"}]],
+    legoViews = LoadNeRFDataset[legoDir, "MaxViews" -> 2, "TargetDimensions" -> {64, 64}, "WhiteBackground" -> True];
+    ListQ[legoViews] &&
+    Length[legoViews] == 2 &&
+    legoViews[[1]]["Dimensions"] === {64, 64} &&
+    MatrixQ[legoViews[[1]]["CameraMatrix"], NumericQ] &&
+    NumericQ[legoViews[[1]]["FOV"]],
+    True
+  ],
+  True,
+  TestID -> "NeRFLite-LegoDatasetLoad"
+]

@@ -8,7 +8,6 @@ Module[{dir = DirectoryName[$InputFileName]},
     Get[FileNameJoin[{dir, "NeRFLiteNet.wl"}]];
     Get[FileNameJoin[{dir, "NeRFLiteTrainer.wl"}]];
     Get[FileNameJoin[{dir, "NeRFLiteVisualizer.wl"}]];
-    Get[FileNameJoin[{dir, "MultiLPENeRF.wl"}]];
   ]
 ];
 
@@ -16,8 +15,7 @@ BeginPackage["WLNeRFLite`", {
   "WLNeRFLite`Data`",
   "WLNeRFLite`Net`",
   "WLNeRFLite`Trainer`",
-  "WLNeRFLite`Visualizer`",
-  "WLNeRFLite`MultiLPE`"
+  "WLNeRFLite`Visualizer`"
 }];
 
 (* Top-level aliases for user convenience *)

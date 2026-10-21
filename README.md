@@ -25,11 +25,11 @@
 4. **Command-Line Suite**:
    * `scripts/convert_exr_to_nerf_json.wl`: Converts RenderMan EXRs to standard NeRF JSON folders with split generation (`train`, `val`, `test`).
    * `scripts/train_nerflite.wl`: Standalone CLI training with compact progress reporting, checkpoint export, and test turntable generation.
+   * `scripts/download_lego_data.py`: High-speed CDN downloader for the canonical synthetic NeRF Lego benchmark dataset.
+   * `scripts/grab_and_run_lego.sh`: One-command automated pipeline to grab the Lego dataset, train, and synthesize novel views.
 5. **Interactive Visualization**:
    * `VisualizeNeRFCameraRig`: 3D frustum and camera orbit visualizer.
    * `RenderNeRFLiteTurntable`: 360-degree novel-view turntable synthesis with direct GIF export.
-6. **Multi-LPE Relighting Support**:
-   * Includes the `WLNeRFLite`MultiLPE`` module for 9-pass radiometric (direct/indirect diffuse, direct/indirect specular) and differential geometric (normals, shape index $S$, curvedness $C$) neural volumetric decomposition.
 
 ---
 
@@ -130,6 +130,29 @@ This generates:
 * `transforms.json` (master unified catalog)
 * `train/`, `val/`, `test/` PNG image directories
 
+### Benchmark: Classic Lego Tractor Dataset
+
+Download the canonical synthetic Lego tractor dataset and train/render in one command:
+
+```bash
+# Automated 1-step grab & run:
+./scripts/grab_and_run_lego.sh --rounds 2000 --res 200 --turntable
+
+# Or download the dataset separately:
+python3 scripts/download_lego_data.py --out-dir data/lego --splits train val test
+
+# Run training directly:
+wolframscript -script scripts/train_nerflite.wl \
+  --dataset "data/lego" \
+  --rounds 3000 \
+  --batch-size 1024 \
+  --res 200 \
+  --ray-bounds "2.0,6.0" \
+  --output "output/lego_nerflite.wlnet" \
+  --render-test "output/lego_test.png" \
+  --render-turntable "output/lego_turntable.gif"
+```
+
 ### Train NeRFLite from the Terminal
 
 ```bash
@@ -153,7 +176,7 @@ Run the comprehensive unit test suite:
 wolframscript -file Tests/RunTests.wl
 ```
 
-All 10 tests verify bidirectional matrix inversion, ray equivalence, dataset export/import roundtrips, harmonic encoding, NetGraph evaluation, and batch generation.
+All 11 tests verify bidirectional matrix inversion, ray equivalence, dataset export/import roundtrips, harmonic encoding, NetGraph evaluation, batch generation, and NeRF synthetic dataset loading.
 
 ---
 

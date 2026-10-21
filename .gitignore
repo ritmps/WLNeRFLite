@@ -14,6 +14,7 @@ cache/
 __pycache__/
 .cache/
 *.log
+data/
 
 # NeRF data caches (keep scripts and tests, ignore raw bulk renders)
 *.exr

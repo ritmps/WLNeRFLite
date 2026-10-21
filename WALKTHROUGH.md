@@ -17,14 +17,15 @@ WLNeRFLite/
 │   ├── NeRFLiteData.wl           # Transforms, EXR binary header reader, NeRF JSON loader/exporter
 │   ├── NeRFLiteNet.wl            # Harmonic encoder, coordinate MLP, differentiable volume renderer
 │   ├── NeRFLiteTrainer.wl        # High-throughput ray pooling, batch generator, training loop
-│   ├── NeRFLiteVisualizer.wl     # Novel-view rendering, 360 turntables, 3D camera rig visualizer
-│   └── MultiLPENeRF.wl           # 9-pass radiometric and differential geometric NeRF
+│   └── NeRFLiteVisualizer.wl     # Novel-view rendering, 360 turntables, 3D camera rig visualizer
 ├── scripts/
 │   ├── convert_exr_to_nerf_json.wl  # CLI tool: RenderMan EXRs -> transforms.json + PNGs
-│   └── train_nerflite.wl            # CLI tool: Standalone model trainer & turntable generator
+│   ├── train_nerflite.wl            # CLI tool: Standalone model trainer & turntable generator
+│   ├── download_lego_data.py        # CLI tool: Multi-threaded NeRF synthetic Lego downloader
+│   └── grab_and_run_lego.sh         # Pipeline: Automated 1-step Lego grab, train & render
 └── Tests/
     ├── RunTests.wl               # Test runner
-    └── NeRFLite.wlt              # 10-point unit test suite
+    └── NeRFLite.wlt              # 11-point unit test suite
 ```
 
 ---

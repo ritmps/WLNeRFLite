@@ -92,11 +92,11 @@ CreateNeRFLiteBatchGenerator[viewsOrPoolInput_, opts : OptionsPattern[]] := Modu
           ];
           If[!IntegerQ[bs] || bs <= 0, bs = defaultBs];
 
-          hasFg = AssociationQ[pool["Foreground"]] && (pool["TotalForegroundRays"] > 0);
-          fgCount = Lookup[pool, "TotalForegroundRays", 0];
-          allCount = Lookup[pool, "TotalAllRays", Length[pool["All", "Origins"]]];
+          fgCount = Lookup[pool, "TotalForegroundRays", If[AssociationQ[pool["Foreground"]], Length[Lookup[pool["Foreground"], "Origins", {}]], 0]];
+          allCount = Lookup[pool, "TotalAllRays", If[AssociationQ[pool["All"]], Length[Lookup[pool["All"], "Origins", {}]], 0]];
+          hasFg = (TrueQ[pool["HasForeground"]] || fgCount > 0) && AssociationQ[pool["Foreground"]];
 
-          If[hasFg && NumericQ[sampleFgRatio] && sampleFgRatio > 0.0,
+          If[hasFg && NumericQ[sampleFgRatio] && sampleFgRatio > 0.0 && fgCount > 0,
             Module[{nFg = Round[bs * Min[1.0, Max[0.0, sampleFgRatio]]], nAll},
               nAll = bs - nFg;
               fgIdx = RandomInteger[{1, fgCount}, nFg];
@@ -104,16 +104,16 @@ CreateNeRFLiteBatchGenerator[viewsOrPoolInput_, opts : OptionsPattern[]] := Modu
                 allIdx = RandomInteger[{1, allCount}, nAll];
                 curOrig = Join[pool["Foreground", "Origins"][[fgIdx]], pool["All", "Origins"][[allIdx]]];
                 curDirs = Join[pool["Foreground", "Directions"][[fgIdx]], pool["All", "Directions"][[allIdx]]];
-                curTgt  = Join[pool["Foreground", "TargetRGB"][[fgIdx]], pool["All", "TargetRGB"][[allIdx]]];,
+                curTgt  = Join[pool["Foreground", "TargetRGB"][[fgIdx]], pool["All", "TargetRGB"][[allIdx]]],
                 curOrig = pool["Foreground", "Origins"][[fgIdx]];
                 curDirs = pool["Foreground", "Directions"][[fgIdx]];
-                curTgt  = pool["Foreground", "TargetRGB"][[fgIdx]];
+                curTgt  = pool["Foreground", "TargetRGB"][[fgIdx]]
               ]
             ],
             allIdx = RandomInteger[{1, allCount}, bs];
             curOrig = pool["All", "Origins"][[allIdx]];
             curDirs = pool["All", "Directions"][[allIdx]];
-            curTgt  = pool["All", "TargetRGB"][[allIdx]];
+            curTgt  = pool["All", "TargetRGB"][[allIdx]]
           ];
 
           sampled = SampleRaysStratified[curOrig, curDirs, numSamples, {tNear, tFar}, "Perturb" -> perturbQ];

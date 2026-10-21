@@ -478,16 +478,16 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
         alpha = Developer`ToPackedArray @ N[rawData[[All, All, 4]]];
         rgb = rawData[[All, All, 1 ;; 3]];
         If[whiteBg,
-          rgb = rgb * ArrayReshape[alpha, {h, w, 1}] + (1.0 - ArrayReshape[alpha, {h, w, 1}]);
+          rgb = rgb * alpha + (1.0 - alpha);
         ];,
         rgb = If[Length[Dimensions[rawData]] == 3, rawData[[All, All, 1 ;; 3]], ArrayReshape[rawData, {h, w, 3}]];
       ];
       rgb = Developer`ToPackedArray @ N[Clip[rgb, {0.0, 1.0}]];
 
       If[alpha =!= None,
-        Module[{pos = Position[alpha, _?(# > 0.1 &)]},
+        Module[{pos = SparseArray[UnitStep[alpha - 0.10001]]["NonzeroPositions"]},
           If[Length[pos] > 10,
-            fgPixels = Developer`ToPackedArray @ Map[{#[[2]] - 1, #[[1]] - 1} &, pos];
+            fgPixels = Developer`ToPackedArray @ Transpose[{pos[[All, 2]] - 1, pos[[All, 1]] - 1}];
           ];
         ];
       ];
@@ -922,6 +922,9 @@ PrecomputeNeRFLiteRayPool[viewsInput_, opts : OptionsPattern[]] := Module[{
       "TargetRGB" -> If[hasAnyBg, Join[allFgColors, allBgColors], allFgColors],
       "Count" -> Length[allFgOrigins] + Length[allBgOrigins]
     |>,
+    "TotalForegroundRays" -> Length[allFgOrigins],
+    "TotalBackgroundRays" -> Length[allBgOrigins],
+    "TotalAllRays" -> Length[allFgOrigins] + Length[allBgOrigins],
     "HasForeground" -> hasAnyFg,
     "HasBackground" -> hasAnyBg,
     "Dimensions" -> If[Length[views] > 0, views[[1]]["Dimensions"], {512, 512}],

@@ -14,8 +14,7 @@ PacletObject[
           "WLNeRFLite`Data`",
           "WLNeRFLite`Net`",
           "WLNeRFLite`Trainer`",
-          "WLNeRFLite`Visualizer`",
-          "WLNeRFLite`MultiLPE`"
+          "WLNeRFLite`Visualizer`"
         }
       }
     }
