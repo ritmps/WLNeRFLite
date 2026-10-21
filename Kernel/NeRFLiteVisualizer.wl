@@ -105,16 +105,33 @@ RenderNeRFLiteView[net_NetGraph, matrix_?MatrixQ, {w_Integer, h_Integer}, opts :
   ]
 ];
 
-makeTurntableMatrix[center_List, radius_?NumericQ, elevation_?NumericQ, azimuth_?NumericQ] := Module[{
-  pos, forward, right, up, c2w
+makeTurntableMatrix[center_List, radius_?NumericQ, elevation_?NumericQ, azimuth_?NumericQ, upAxis_String : "Z"] := Module[{
+  pos, forward, right, up, c2w, axis, worldUp
 },
-  pos = center + radius * {
-    Cos[elevation] * Sin[azimuth],
-    Sin[elevation],
-    Cos[elevation] * Cos[azimuth]
-  };
+  axis = Which[
+    MemberQ[{"z", "z-up", "nerf"}, ToLowerCase[upAxis]], "Z",
+    MemberQ[{"y", "y-up", "renderman"}, ToLowerCase[upAxis]], "Y",
+    True, "Z"
+  ];
+
+  If[axis === "Z",
+    worldUp = {0., 0., 1.};
+    pos = center + radius * {
+      Cos[elevation] * Cos[azimuth],
+      Cos[elevation] * Sin[azimuth],
+      Sin[elevation]
+    };
+    ,
+    worldUp = {0., 1., 0.};
+    pos = center + radius * {
+      Cos[elevation] * Sin[azimuth],
+      Sin[elevation],
+      Cos[elevation] * Cos[azimuth]
+    };
+  ];
+
   forward = Normalize[center - pos];
-  right = Normalize[Cross[forward, {0., 1., 0.}]];
+  right = Normalize[Cross[forward, worldUp]];
   up = Normalize[Cross[right, forward]];
 
   c2w = {
@@ -129,11 +146,12 @@ makeTurntableMatrix[center_List, radius_?NumericQ, elevation_?NumericQ, azimuth_
 Options[RenderNeRFLiteTurntable] = Join[
   {
     "NumFrames" -> 36,
-    "Radius" -> 5.0,
+    "Radius" -> 4.0,
     "Elevation" -> 25.0 * Degree,
-    "Target" -> {0., 0.5, 0.},
+    "Target" -> {0., 0., 0.},
+    "UpAxis" -> "Z",
     "Resolution" -> {256, 256},
-    "FOV" -> 48.0,
+    "FOV" -> 40.0,
     "ChunkSize" -> 4096,
     "TargetDevice" -> "GPU",
     "ExportFile" -> None
@@ -146,6 +164,7 @@ RenderNeRFLiteTurntable[net_NetGraph, opts : OptionsPattern[]] := Module[{
   radius = N @ OptionValue["Radius"],
   elevation = N @ OptionValue["Elevation"],
   target = N @ OptionValue["Target"],
+  upAxis = ToString @ OptionValue["UpAxis"],
   res = OptionValue["Resolution"],
   fov = N @ OptionValue["FOV"],
   chunkSize = OptionValue["ChunkSize"],
@@ -158,7 +177,7 @@ RenderNeRFLiteTurntable[net_NetGraph, opts : OptionsPattern[]] := Module[{
 
   Do[
     Module[{mat, img},
-      mat = makeTurntableMatrix[target, radius, elevation, phi];
+      mat = makeTurntableMatrix[target, radius, elevation, phi, upAxis];
       img = RenderNeRFLiteView[
         net, mat, res,
         "FOV" -> fov,

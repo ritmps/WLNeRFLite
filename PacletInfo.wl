@@ -16,6 +16,11 @@ PacletObject[
           "WLNeRFLite`Trainer`",
           "WLNeRFLite`Visualizer`"
         }
+      },
+      {
+        "Documentation",
+        "Language" -> "English",
+        "MainPage" -> "Guides/WLNeRFLite"
       }
     }
   |>

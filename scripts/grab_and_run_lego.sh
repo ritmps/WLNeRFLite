@@ -14,12 +14,13 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="$ROOT_DIR/data/lego"
 OUTPUT_DIR="$ROOT_DIR/output"
 
-ROUNDS=2000
+ROUNDS=3000
 BATCH_SIZE=1024
 RES=200
 DEVICE="Automatic"
 RENDER_TURNTABLE=false
 SKIP_DOWNLOAD=false
+COMPARE_VAL=true
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -117,9 +118,10 @@ CMD_ARGS=(
   --res "$RES"
   --device "$DEVICE"
   --ray-bounds "2.0,6.0"
-  --sample-fg-ratio "0.5"
+  --sample-fg-ratio "0.7"
   --output "$OUTPUT_DIR/lego_nerflite.wlnet"
   --render-test "$OUTPUT_DIR/lego_test.png"
+  --compare-val "$OUTPUT_DIR/lego_val_compare.png"
 )
 
 if [ "$RENDER_TURNTABLE" = true ]; then
@@ -133,6 +135,7 @@ echo "=================================================================="
 echo "Pipeline finished successfully!"
 echo "Model Checkpoint : $OUTPUT_DIR/lego_nerflite.wlnet"
 echo "Rendered Test    : $OUTPUT_DIR/lego_test.png"
+echo "Val Comparison   : $OUTPUT_DIR/lego_val_compare.png"
 if [ "$RENDER_TURNTABLE" = true ]; then
   echo "Turntable GIF    : $OUTPUT_DIR/lego_turntable.gif"
 fi

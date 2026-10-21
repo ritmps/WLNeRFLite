@@ -113,8 +113,8 @@ CreateNeRFLiteNet[opts : OptionsPattern[]] := Module[{
   If[!IntegerQ[numLayers] || numLayers <= 0, numLayers = 2];
 
   effectiveBgColor = Switch[bgColorOpt,
-    Automatic, {0.388, 0.337, 0.298},
     _List /; VectorQ[bgColorOpt, NumericQ] && Length[bgColorOpt] == 3, N[bgColorOpt],
+    _List /; Length[bgColorOpt] >= 3, N[bgColorOpt[[1 ;; 3]]],
     _, None
   ];
 

@@ -6,11 +6,11 @@
        --dataset "data/lego" \
        --rounds 3000 \
        --batch-size 1024 \
-       --device "Automatic" \
-       --ray-bounds "2.0,6.0" \
-       --downsample 2 \
+       --res 200 \
+       --loss "L2" \
        --output "output/lego_nerflite.wlnet" \
        --render-test "output/lego_test.png" \
+       --compare-val "output/lego_val_compare.png" \
        --render-turntable "output/lego_turntable.gif"
 *)
 
@@ -40,24 +40,30 @@ parseArg[flag_String, default_] := Module[{pos = FirstPosition[args, flag]},
   If[MissingQ[pos] || pos[[1]] >= Length[args], default, args[[pos[[1]] + 1]]]
 ];
 
-datasetPath   = parseArg["--dataset", None];
-roundsStr     = parseArg["--rounds", "5000"];
-batchSizeStr  = parseArg["--batch-size", "1024"];
-deviceArg     = parseArg["--device", "Automatic"];
-lrStr         = parseArg["--lr", "0.0005"];
-rayBoundsStr  = parseArg["--ray-bounds", None];
-downsampleStr = parseArg["--downsample", None];
-targetResStr  = parseArg["--res", None];
-fgRatioStr    = parseArg["--sample-fg-ratio", "0.5"];
-whiteBgStr    = parseArg["--white-bg", "True"];
-maxViewsStr   = parseArg["--max-views", None];
-outPath       = parseArg["--output", None];
-testImgPath   = parseArg["--render-test", None];
-turntablePath = parseArg["--render-turntable", None];
+datasetPath    = parseArg["--dataset", None];
+roundsStr      = parseArg["--rounds", "3000"];
+batchSizeStr   = parseArg["--batch-size", "1024"];
+deviceArg      = parseArg["--device", "Automatic"];
+lrStr          = parseArg["--lr", "0.001"];
+lossTypeArg    = parseArg["--loss", None];
+rayBoundsStr   = parseArg["--ray-bounds", None];
+downsampleStr  = parseArg["--downsample", None];
+targetResStr   = parseArg["--res", None];
+fgRatioStr     = parseArg["--sample-fg-ratio", "0.7"];
+whiteBgStr     = parseArg["--white-bg", "True"];
+maxViewsStr    = parseArg["--max-views", None];
+bandsStr       = parseArg["--bands", None];
+hiddenDimStr   = parseArg["--hidden-dim", None];
+layersStr      = parseArg["--layers", None];
+outPath        = parseArg["--output", None];
+testImgPath    = parseArg["--render-test", None];
+compareValPath = parseArg["--compare-val", None];
+turntablePath  = parseArg["--render-turntable", None];
+upAxisArg      = parseArg["--up-axis", None];
 
 If[datasetPath === None,
   Print["Error: --dataset argument is required."];
-  Print["Usage: wolframscript -script scripts/train_nerflite.wl --dataset <path_or_dir> [--rounds 5000] [--batch-size 1024] [--device CPU|GPU|Automatic] [--ray-bounds 2.0,6.0] [--downsample 2] [--output model.wlnet]"];
+  Print["Usage: wolframscript -script scripts/train_nerflite.wl --dataset <path_or_dir> [--rounds 3000] [--batch-size 1024] [--device CPU|GPU|Automatic] [--res 200] [--loss L2|LogL1] [--output model.wlnet]"];
   Exit[1];
 ];
 
@@ -68,7 +74,7 @@ fgRatio = ToExpression[fgRatioStr];
 whiteBg = MemberQ[{"true", "1", "yes"}, ToLowerCase[ToString[whiteBgStr]]];
 maxViews = If[maxViewsStr =!= None, ToExpression[maxViewsStr], All];
 
-(* Device selection: on macOS ARM64, CPU is fastest & native for NetTrain *)
+(* Device selection: on macOS ARM64, CPU is native and fastest for NetTrain *)
 device = Which[
   MemberQ[{"gpu", "cuda"}, ToLowerCase[deviceArg]] && $SystemID === "MacOSX-ARM64",
     Print["Note: macOS ARM64 uses native vector CPU for NetTrain. Setting device to CPU."];
@@ -83,6 +89,37 @@ Print["[1/4] Loading views from: ", datasetPath];
 
 isNeRFDataset = DirectoryQ[datasetPath] && Length[FileNames["transforms*.json", datasetPath]] > 0;
 isJSONFile = StringEndsQ[ToLowerCase[datasetPath], ".json"];
+
+(* Model Hyperparameters tailored to dataset type *)
+lossType = Which[
+  lossTypeArg =!= None, lossTypeArg,
+  (isNeRFDataset || isJSONFile), "L2",
+  True, "LogL1"
+];
+
+bands = Which[
+  bandsStr =!= None, ToExpression[bandsStr],
+  (isNeRFDataset || isJSONFile), 8,
+  True, 6
+];
+
+hiddenDim = Which[
+  hiddenDimStr =!= None, ToExpression[hiddenDimStr],
+  (isNeRFDataset || isJSONFile), 96,
+  True, 64
+];
+
+numLayers = Which[
+  layersStr =!= None, ToExpression[layersStr],
+  (isNeRFDataset || isJSONFile), 3,
+  True, 2
+];
+
+upAxis = Which[
+  upAxisArg =!= None, upAxisArg,
+  (isNeRFDataset || isJSONFile), "Z",
+  True, "Y"
+];
 
 (* Determine TargetDimensions *)
 targetDims = Which[
@@ -126,23 +163,27 @@ rayBounds = Which[
   StringQ[rayBoundsStr] && StringContainsQ[rayBoundsStr, ","],
     Map[ToExpression, StringSplit[rayBoundsStr, ","]],
   (isNeRFDataset || isJSONFile),
-    (* Standard NeRF Synthetic benchmark objects (Lego, Chair, etc.) are centered at origin with camera distance ~4.0 *)
+    (* Standard NeRF Synthetic objects (Lego, etc.) centered at origin with camera distance ~4.0 *)
     {2.0, 6.0},
   True,
     {3.0, 10.0}
 ];
-Print["      Volumetric Ray Bounds: [", rayBounds[[1]], ", ", rayBounds[[2]], "]"];
+Print["      Volumetric Ray Bounds: [", rayBounds[[1]], ", ", rayBounds[[2]], "] | Loss: ", lossType];
+Print["      Architecture: ", bands, " bands (harmonic), ", hiddenDim, " hidden dim, ", numLayers, " layers, up-axis: ", upAxis];
 
-Print["[2/4] Initializing NeRFLite coordinate MLP (10k params)..."];
+bgColor = Lookup[views[[1]], "BackgroundColor", If[whiteBg, {1., 1., 1.}, None]];
+
+Print["[2/4] Initializing NeRFLite coordinate MLP (embedded volumetric quadrature)..."];
 fieldNet = NetInitialize @ CreateNeRFLiteNet[
   "NumSamples" -> 32,
-  "HarmonicBands" -> 6,
-  "HiddenDim" -> 64,
-  "NumLayers" -> 2,
+  "HarmonicBands" -> bands,
+  "HiddenDim" -> hiddenDim,
+  "NumLayers" -> numLayers,
+  "BackgroundColor" -> bgColor,
   "ColorActivation" -> LogisticSigmoid
 ];
 
-Print["[3/4] Starting training on target device: ", device, " (", rounds, " rounds, batch size ", batchSize, ")..."];
+Print["[3/4] Starting training on target device: ", device, " (", rounds, " rounds, batch size ", batchSize, ", LR ", lr, ")..."];
 tStart = AbsoluteTime[];
 trainedModel = TrainNeRFLiteModel[
   fieldNet,
@@ -150,6 +191,7 @@ trainedModel = TrainNeRFLiteModel[
   "BatchSize" -> batchSize,
   "MaxTrainingRounds" -> rounds,
   "LearningRate" -> lr,
+  "Loss" -> lossType,
   "RayBounds" -> rayBounds,
   "SampleForegroundRatio" -> fgRatio,
   "TargetDevice" -> device,
@@ -168,7 +210,7 @@ If[StringQ[outPath] && outPath =!= "",
 ];
 
 If[StringQ[testImgPath] && testImgPath =!= "",
-  Print["      Rendering test view to: ", testImgPath];
+  Print["      Rendering training test view to: ", testImgPath];
   If[!DirectoryQ[DirectoryName[testImgPath]], CreateDirectory[DirectoryName[testImgPath], CreateIntermediateDirectories -> True]];
   testImg = RenderNeRFLiteView[
     trainedModel,
@@ -181,6 +223,46 @@ If[StringQ[testImgPath] && testImgPath =!= "",
   Export[testImgPath, testImg];
 ];
 
+If[StringQ[compareValPath] && compareValPath =!= "",
+  Print["      Evaluating reconstruction against validation set..."];
+  valViews = Which[
+    isNeRFDataset,
+      LoadNeRFDataset[datasetPath, "Split" -> "val", loadOpts],
+    True,
+      views
+  ];
+  If[ListQ[valViews] && Length[valViews] > 0,
+    Module[{
+      vVal = valViews[[1]], valRecon, gtImg, diffImg, psnr, mse, compGrid, w, h
+    },
+      valRecon = RenderNeRFLiteView[
+        trainedModel,
+        vVal["CameraMatrix"],
+        vVal["Dimensions"],
+        "FOV" -> vVal["FOV"],
+        "RayBounds" -> rayBounds,
+        "TargetDevice" -> device
+      ];
+      gtImg = Image[vVal["RGB"], "Real32", ColorSpace -> "RGB"];
+      {w, h} = ImageDimensions[gtImg];
+
+      diffImg = Image[Clip[3.0 * Abs[ImageData[valRecon] - ImageData[gtImg]], {0.0, 1.0}]];
+      mse = Mean[Flatten[(ImageData[valRecon] - ImageData[gtImg])^2]];
+      psnr = If[mse > 0, Round[-10.0 * Log10[mse], 0.01], Infinity];
+      Print["      Validation View 0 -> PSNR: ", psnr, " dB | MSE: ", NumberForm[mse, {5, 4}]];
+
+      compGrid = ImageAssemble[{{
+        ImageCrop[gtImg, {w, h}],
+        ImageCrop[valRecon, {w, h}],
+        ImageCrop[diffImg, {w, h}]
+      }}];
+      If[!DirectoryQ[DirectoryName[compareValPath]], CreateDirectory[DirectoryName[compareValPath], CreateIntermediateDirectories -> True]];
+      Export[compareValPath, compGrid];
+      Print["      Validation comparison image saved: ", compareValPath, " (Left: GT, Mid: Recon, Right: 3x Error)"];
+    ]
+  ];
+];
+
 If[StringQ[turntablePath] && turntablePath =!= "",
   Print["      Rendering 360 turntable GIF to: ", turntablePath];
   If[!DirectoryQ[DirectoryName[turntablePath]], CreateDirectory[DirectoryName[turntablePath], CreateIntermediateDirectories -> True]];
@@ -190,7 +272,9 @@ If[StringQ[turntablePath] && turntablePath =!= "",
     "NumFrames" -> 36,
     "Resolution" -> {256, 256},
     "Radius" -> camRadius,
+    "Elevation" -> 30.0 * Degree,
     "Target" -> {0., 0., 0.},
+    "UpAxis" -> upAxis,
     "FOV" -> views[[1]]["FOV"],
     "RayBounds" -> rayBounds,
     "TargetDevice" -> device,
