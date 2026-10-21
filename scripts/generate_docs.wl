@@ -73,8 +73,8 @@ Module[{
     ]
   ];
 
-  createDocNotebook[symName_String, usageText_String, ctx_String, opts_List, seeAlsoList_List] := Module[
-    {notesCells, seeAlsoCells, optionsTable, nbPath},
+  createDocNotebook[symName_String, usageInput_, ctx_String, opts_List, seeAlsoList_List] := Module[
+    {notesCells, seeAlsoCells, optionsTable, nbPath, usageText = ToString[usageInput]},
 
     If[opts =!= {},
       optionsTable = Cell[BoxData[
@@ -195,10 +195,11 @@ Module[{
           usage, symObj, optsList, seeAlso
         },
           symObj = ToExpression[pkg <> shortName, InputForm, Unevaluated];
-          usage = Replace[MessageName[symObj, "usage"], {
-            _Missing :> Lookup[curatedUsages, shortName, shortName <> "[...] evaluates " <> shortName <> "."],
-            u_String :> u
-          }];
+          usage = Which[
+            KeyExistsQ[curatedUsages, shortName], curatedUsages[shortName],
+            StringQ[Quiet @ MessageName[symObj, "usage"]], MessageName[symObj, "usage"],
+            True, shortName <> "[...] evaluates " <> shortName <> "."
+          ];
           optsList = Quiet @ Check[Options[symObj], {}];
           seeAlso = getSeeAlso[shortName];
 
