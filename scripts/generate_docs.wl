@@ -99,7 +99,7 @@ Module[{
             sig = parsed[[1, 1]];
             desc = parsed[[1, 2]];
             sigBox = formatSignatureBoxes[sig];
-            {"", Cell[TextData[{Cell[BoxData[sigBox], "InlineFormula"], " ", desc}]]}
+            {"", Cell[TextData[{Cell[BoxData[sigBox], "InlineFormula", FontFamily -> "Source Sans Pro"], "\[LineSeparator]", desc}]]}
           ,
             {"", Cell[TextData[{trimmed}]]}
           ]
@@ -107,7 +107,7 @@ Module[{
       ],
       lines
     ];
-    Cell[BoxData[GridBox[gridRows]], "Usage"]
+    Cell[BoxData[GridBox[gridRows]], "Usage", CellID -> 982511436]
   ];
 
   createDocNotebook[symName_String, usageInput_, ctx_String, opts_List, seeAlsoList_List] := Module[
@@ -162,14 +162,7 @@ Module[{
     nbPath = FileNameJoin[{docRootDir, symName <> ".nb"}];
     Export[nbPath,
       Notebook[{
-        Cell[CellGroupData[{
-          Cell["Categorization", "CategorizationSection"],
-          Cell["Symbol", "Categorization", CellLabel -> "Entity Type"],
-          Cell["WLNeRFLite", "Categorization", CellLabel -> "Paclet Name"],
-          Cell[ctx, "Categorization", CellLabel -> "Context"],
-          Cell["WLNeRFLite/ref/" <> symName, "Categorization", CellLabel -> "URI"]
-        }, Closed]],
-
+        Cell[ctx, "ContextNameCell"],
         Cell[CellGroupData[{
           Cell[symName, "ObjectName"],
           formatUsageCell[usageText],
