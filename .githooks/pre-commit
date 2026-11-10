@@ -30,13 +30,18 @@ repo_root = find_repo_root(script_dir)
 if not repo_root:
     sys.exit(0)
 
+# Clean git environment so submodule or parent git calls do not interfere
+clean_env = os.environ.copy()
+for k in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR"]:
+    clean_env.pop(k, None)
+
 paclet_info = os.path.join(repo_root, "PacletInfo.wl")
 is_manual = any(arg in sys.argv for arg in ["--force", "-f", "--bump"])
 
 if not is_manual:
     try:
         staged = subprocess.check_output(
-            ["git", "diff", "--cached", "--name-only"], cwd=repo_root
+            ["git", "diff", "--cached", "--name-only"], cwd=repo_root, env=clean_env
         ).decode().splitlines()
     except Exception:
         staged = []
@@ -67,7 +72,7 @@ current_build = int(m_ver.group(3)) if m_ver.group(3) else 0
 
 try:
     count = int(subprocess.check_output(
-        ["git", "rev-list", "--count", "HEAD"], cwd=repo_root
+        ["git", "rev-list", "--count", "HEAD"], cwd=repo_root, env=clean_env
     ).decode().strip())
     git_build = count + 1
 except Exception:
@@ -89,12 +94,12 @@ else:
 if new_content != content or not os.path.exists(os.path.join(repo_root, "version.json")):
     with open(paclet_info, "w", encoding="utf-8") as f:
         f.write(new_content)
-    subprocess.run(["git", "add", paclet_info], cwd=repo_root)
+    subprocess.run(["git", "add", paclet_info], cwd=repo_root, env=clean_env)
 
 # 2. Update version.json
 version_json = os.path.join(repo_root, "version.json")
 try:
-    now_str = subprocess.check_output(["date"], cwd=repo_root).decode().strip()
+    now_str = subprocess.check_output(["date"], cwd=repo_root, env=clean_env).decode().strip()
 except Exception:
     now_str = ""
 
@@ -108,7 +113,7 @@ vdata = {
 with open(version_json, "w", encoding="utf-8") as vf:
     json.dump(vdata, vf, indent=2)
     vf.write("\n")
-subprocess.run(["git", "add", version_json], cwd=repo_root)
+subprocess.run(["git", "add", version_json], cwd=repo_root, env=clean_env)
 
 # 3. Update Kernel version symbol if present
 kernel_dir = os.path.join(repo_root, "Kernel")
@@ -124,7 +129,7 @@ if os.path.exists(kernel_dir):
                 if new_k_text != k_text:
                     with open(kf_path, "w", encoding="utf-8") as kf:
                         kf.write(new_k_text)
-                    subprocess.run(["git", "add", kf_path], cwd=repo_root)
+                    subprocess.run(["git", "add", kf_path], cwd=repo_root, env=clean_env)
 
 # 4. Update Tests version check if present
 tests_dir = os.path.join(repo_root, "Tests")
@@ -140,6 +145,6 @@ if os.path.exists(tests_dir):
                 if new_t_text != t_text:
                     with open(tf_path, "w", encoding="utf-8") as tf:
                         tf.write(new_t_text)
-                    subprocess.run(["git", "add", tf_path], cwd=repo_root)
+                    subprocess.run(["git", "add", tf_path], cwd=repo_root, env=clean_env)
 
 print(f"[hook] Bumped {paclet_name}: Version -> \"{ver_str}\" (Build {build_num})")
