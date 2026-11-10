@@ -1,44 +1,145 @@
 #!/usr/bin/env python3
+"""
+Git pre-commit hook and version management utility for Wolfram Language paclets.
+Automatically bumps the build number (Maj.Min.Build) on commit and syncs:
+  - PacletInfo.wl ("Version" -> "X.Y.Z", "BuildNumber" -> "Z")
+  - version.json (major_version, minor_version, build_number, date)
+  - Kernel/<PacletName>.wl ($<PacletName>Version = "X.Y.Z";)
+  - Tests/<PacletName>.wlt ($<PacletName>Version === "X.Y.Z")
+"""
+
 import os
-import re
-import subprocess
 import sys
+import re
+import json
+import subprocess
 
-# Locate repo root
-script_dir = os.path.dirname(os.path.abspath(__file__))
-repo_root = os.path.dirname(script_dir)
-paclet_info = os.path.join(repo_root, "PacletInfo.wl")
-
-if not os.path.exists(paclet_info):
+if os.environ.get("SKIP_VERSION_BUMP") == "1":
     sys.exit(0)
 
-try:
-    count = subprocess.check_output(
-        ["git", "rev-list", "--count", "HEAD"],
-        cwd=repo_root
-    ).decode().strip()
-    build_num = str(int(count) + 1)
-except Exception:
-    build_num = "1"
+def find_repo_root(start_dir):
+    d = os.path.abspath(start_dir)
+    while d != "/":
+        if os.path.exists(os.path.join(d, "PacletInfo.wl")):
+            return d
+        d = os.path.dirname(d)
+    return None
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+repo_root = find_repo_root(script_dir)
+if not repo_root:
+    sys.exit(0)
+
+paclet_info = os.path.join(repo_root, "PacletInfo.wl")
+is_manual = any(arg in sys.argv for arg in ["--force", "-f", "--bump"])
+
+if not is_manual:
+    try:
+        staged = subprocess.check_output(
+            ["git", "diff", "--cached", "--name-only"], cwd=repo_root
+        ).decode().splitlines()
+    except Exception:
+        staged = []
+
+    if not staged:
+        sys.exit(0)
+
+    non_version_staged = [
+        f for f in staged
+        if not (f.endswith("PacletInfo.wl") or f.endswith("version.json") or f.startswith(".githooks/"))
+    ]
+    if not non_version_staged:
+        sys.exit(0)
 
 with open(paclet_info, "r", encoding="utf-8") as f:
     content = f.read()
 
-# Update "Version" -> "major.minor.<build_num>"
+m_name = re.search(r'"Name"\s*->\s*"([^"]+)"', content)
+paclet_name = m_name.group(1) if m_name else os.path.basename(repo_root)
+
+m_ver = re.search(r'"Version"\s*->\s*"(\d+)\.(\d+)(?:\.(\d+))?"', content)
+if not m_ver:
+    sys.exit(0)
+
+major = int(m_ver.group(1))
+minor = int(m_ver.group(2))
+current_build = int(m_ver.group(3)) if m_ver.group(3) else 0
+
+try:
+    count = int(subprocess.check_output(
+        ["git", "rev-list", "--count", "HEAD"], cwd=repo_root
+    ).decode().strip())
+    git_build = count + 1
+except Exception:
+    git_build = 1
+
+build_num = max(git_build, current_build + 1)
+ver_str = f"{major}.{minor}.{build_num}"
+
+# 1. Update PacletInfo.wl
 ver_pattern = r'"Version"\s*->\s*"(\d+)\.(\d+)(?:\.\d+)?"'
-ver_repl = f'"Version" -> "\\g<1>.\\g<2>.{build_num}"'
+ver_repl = f'"Version" -> "{major}.{minor}.{build_num}"'
 new_content = re.sub(ver_pattern, ver_repl, content)
 
-# Also update "BuildNumber"
 if '"BuildNumber"' in new_content:
     new_content = re.sub(r'"BuildNumber"\s*->\s*"[^"]*"', f'"BuildNumber" -> "{build_num}"', new_content)
 else:
     new_content = re.sub(r'("Version"\s*->\s*"[^"]*",)', rf'\1\n    "BuildNumber" -> "{build_num}",', new_content)
 
-if new_content != content:
+if new_content != content or not os.path.exists(os.path.join(repo_root, "version.json")):
     with open(paclet_info, "w", encoding="utf-8") as f:
         f.write(new_content)
     subprocess.run(["git", "add", paclet_info], cwd=repo_root)
-    m = re.search(r'"Version"\s*->\s*"([^"]*)"', new_content)
-    ver_str = m.group(1) if m else build_num
-    print(f"[hook] Bumped PacletInfo.wl: Version -> \"{ver_str}\" (Build {build_num})")
+
+# 2. Update version.json
+version_json = os.path.join(repo_root, "version.json")
+try:
+    now_str = subprocess.check_output(["date"], cwd=repo_root).decode().strip()
+except Exception:
+    now_str = ""
+
+vdata = {
+    "major_version": major,
+    "minor_version": minor,
+    "revision_number": 0,
+    "build_number": int(build_num),
+    "date": now_str
+}
+with open(version_json, "w", encoding="utf-8") as vf:
+    json.dump(vdata, vf, indent=2)
+    vf.write("\n")
+subprocess.run(["git", "add", version_json], cwd=repo_root)
+
+# 3. Update Kernel version symbol if present
+kernel_dir = os.path.join(repo_root, "Kernel")
+if os.path.exists(kernel_dir):
+    for kf_name in os.listdir(kernel_dir):
+        if kf_name.endswith(".wl"):
+            kf_path = os.path.join(kernel_dir, kf_name)
+            with open(kf_path, "r", encoding="utf-8") as kf:
+                k_text = kf.read()
+            k_pat = rf'(\${paclet_name}Version\s*=\s*")[^"]+(";)'
+            if re.search(k_pat, k_text):
+                new_k_text = re.sub(k_pat, rf'\g<1>{ver_str}\g<2>', k_text)
+                if new_k_text != k_text:
+                    with open(kf_path, "w", encoding="utf-8") as kf:
+                        kf.write(new_k_text)
+                    subprocess.run(["git", "add", kf_path], cwd=repo_root)
+
+# 4. Update Tests version check if present
+tests_dir = os.path.join(repo_root, "Tests")
+if os.path.exists(tests_dir):
+    for tf_name in os.listdir(tests_dir):
+        if tf_name.endswith(".wlt"):
+            tf_path = os.path.join(tests_dir, tf_name)
+            with open(tf_path, "r", encoding="utf-8") as tf:
+                t_text = tf.read()
+            t_pat = rf'(\${paclet_name}Version\s*===\s*")[^"]+(")'
+            if re.search(t_pat, t_text):
+                new_t_text = re.sub(t_pat, rf'\g<1>{ver_str}\g<2>', t_text)
+                if new_t_text != t_text:
+                    with open(tf_path, "w", encoding="utf-8") as tf:
+                        tf.write(new_t_text)
+                    subprocess.run(["git", "add", tf_path], cwd=repo_root)
+
+print(f"[hook] Bumped {paclet_name}: Version -> \"{ver_str}\" (Build {build_num})")
