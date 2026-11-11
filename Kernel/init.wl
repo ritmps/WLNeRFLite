@@ -19,7 +19,7 @@ BeginPackage["WLNeRFLite`", {
 }];
 
 $WLNeRFLiteVersion::usage = "$WLNeRFLiteVersion gives the version string of the loaded WLNeRFLite paclet.";
-$WLNeRFLiteVersion = "1.2.19";
+$WLNeRFLiteVersion = "1.2.21";
 
 (* Top-level aliases for user convenience *)
 DownloadNeRFDataset = WLNeRFLite`Data`DownloadNeRFDataset;

@@ -1,8 +1,8 @@
 PacletObject[
   <|
     "Name" -> "WLNeRFLite",
-    "Version" -> "1.2.19",
-    "BuildNumber" -> "19",
+    "Version" -> "1.2.21",
+    "BuildNumber" -> "21",
     "WolframVersion" -> "13.0+",
     "Creator" -> "Flip Phillips <flip@flipphillips.com>",
     "URL" -> "https://github.com/ritmps/WLNeRFLite",

@@ -190,7 +190,8 @@ Options[SampleNeRFLiteDensityVolume] = {
   "Bounds" -> {{-1.2, 1.2}, {-1.2, 1.2}, {-1.2, 1.2}},
   "Resolution" -> 32,
   "TargetDevice" -> Automatic,
-  "BatchSize" -> 16384
+  "BatchSize" -> 16384,
+  "Return" -> "Array"
 };
 
 SampleNeRFLiteDensityVolume[net : (_NetGraph | _NetChain), opts : OptionsPattern[]] :=
@@ -200,7 +201,8 @@ SampleNeRFLiteDensityVolume[net : (_NetGraph | _NetChain), {xRange_List, yRange_
   densityNet, xs, ys, zs, grid, pts, nPts, chunks, allSigma = {},
   deviceOpt = OptionValue["TargetDevice"],
   bs = OptionValue["BatchSize"],
-  device
+  returnType = OptionValue["Return"],
+  device, vol
 },
   device = If[deviceOpt === Automatic,
     If[$SystemID === "MacOSX-ARM64", "CPU", "GPU"],
@@ -232,7 +234,17 @@ SampleNeRFLiteDensityVolume[net : (_NetGraph | _NetChain), {xRange_List, yRange_
     {c, chunks}
   ];
 
-  ArrayReshape[allSigma, {res, res, res}]
+  vol = Developer`ToPackedArray @ N @ ArrayReshape[allSigma, {res, res, res}];
+
+  If[returnType === "Image3D",
+    Image3D[
+      Reverse[Rescale[Clip[vol, {0., Max[1.*^-6, Max[vol]]}]]],
+      ColorFunction -> (Directive[Opacity[#1^1.5], ColorData["SunsetColors"][#1]] &),
+      Boxed -> True,
+      Background -> Black
+    ],
+    vol
+  ]
 ];
 
 Options[VisualizeNeRFCameraRig] = {

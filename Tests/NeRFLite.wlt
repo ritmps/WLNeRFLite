@@ -112,9 +112,11 @@ VerificationTest[
   densityNet = ExtractNeRFLiteDensityNet[net];
   colorNet = ExtractNeRFLiteColorNet[net];
   vol = SampleNeRFLiteDensityVolume[net, "Bounds" -> {{-1., 1.}, {-1., 1.}, {-1., 1.}}, "Resolution" -> 8, "TargetDevice" -> "CPU"];
+  img3d = SampleNeRFLiteDensityVolume[densityNet, {{-1., 1.}, {-1., 1.}, {-1., 1.}}, 8, "TargetDevice" -> "CPU", "Return" -> "Image3D"];
   MatchQ[densityNet, _NetChain] &&
   MatchQ[colorNet, _NetChain] &&
-  Dimensions[vol] === {8, 8, 8},
+  Dimensions[vol] === {8, 8, 8} &&
+  ImageQ[img3d] && ImageDimensions[img3d] === {8, 8, 8},
   True,
   TestID -> "NeRFLite-DensityAndColorExtraction"
 ]

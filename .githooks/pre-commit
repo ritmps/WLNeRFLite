@@ -3,7 +3,6 @@
 (* Git pre-commit hook and version management utility for WLNeRFLite.
    Automatically bumps the build number (Maj.Min.Build) on commit and syncs:
      - PacletInfo.wl ("Version" -> "X.Y.Z", "BuildNumber" -> "Z")
-     - version.json (major_version, minor_version, build_number, date)
      - Kernel/init.wl ($WLNeRFLiteVersion = "X.Y.Z";)
      - Tests/NeRFLite.wlt ($WLNeRFLiteVersion === "X.Y.Z")
 *)
@@ -30,7 +29,7 @@ If[!isManual,
   stagedFiles = Select[StringSplit[StringTrim[stagedOut], "\n"], StringLength[#] > 0 &];
   nonVersionStaged = Select[
     stagedFiles,
-    !(StringEndsQ[#, "PacletInfo.wl"] || StringEndsQ[#, "version.json"] || StringStartsQ[#, ".githooks/"]) &
+    !(StringEndsQ[#, "PacletInfo.wl"] || StringStartsQ[#, ".githooks/"]) &
   ];
   If[Length[nonVersionStaged] == 0, Exit[0]];
 ];
@@ -66,25 +65,7 @@ newContent = StringReplace[
 Export[pacletFile, newContent <> "\n", "Text"];
 Quiet @ RunProcess[{"git", "add", pacletFile}, ProcessDirectory -> repoRoot];
 
-(* 2. Update version.json *)
-versionJsonPath = FileNameJoin[{repoRoot, "version.json"}];
-dateStr = Quiet @ Check[
-  StringTrim @ RunProcess[{"date"}, "StandardOutput", ProcessDirectory -> repoRoot],
-  DateString[]
-];
-vJsonText = StringJoin[
-  "{\n",
-  "  \"major_version\": ", ToString[major], ",\n",
-  "  \"minor_version\": ", ToString[minor], ",\n",
-  "  \"revision_number\": 0,\n",
-  "  \"build_number\": ", ToString[buildNum], ",\n",
-  "  \"date\": \"", dateStr, "\"\n",
-  "}\n"
-];
-Export[versionJsonPath, vJsonText, "Text"];
-Quiet @ RunProcess[{"git", "add", versionJsonPath}, ProcessDirectory -> repoRoot];
-
-(* 3. Update Kernel/init.wl *)
+(* 2. Update Kernel/init.wl *)
 initPath = FileNameJoin[{repoRoot, "Kernel", "init.wl"}];
 If[FileExistsQ[initPath],
   initText = Import[initPath, "Text"];
@@ -98,7 +79,7 @@ If[FileExistsQ[initPath],
   ];
 ];
 
-(* 4. Update Tests/NeRFLite.wlt *)
+(* 3. Update Tests/NeRFLite.wlt *)
 testPath = FileNameJoin[{repoRoot, "Tests", "NeRFLite.wlt"}];
 If[FileExistsQ[testPath],
   testText = Import[testPath, "Text"];
