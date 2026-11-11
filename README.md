@@ -104,7 +104,12 @@ densityGrid = SampleNeRFLiteDensityVolume[
   "Bounds" -> {{-1.2, 1.2}, {-1.2, 1.2}, {-1.2, 1.2}},
   "Resolution" -> 64
 ];
-Image3D[Rescale[densityGrid], ColorFunction -> "SunsetColors"]
+Image3D[
+  Reverse[Rescale[Clip[densityGrid, {0., Max[densityGrid]}]]],
+  ColorFunction -> (Directive[Opacity[#1^1.5], ColorData["SunsetColors"][#1]] &),
+  Boxed -> True,
+  Background -> Black
+]
 ```
 
 ---
