@@ -26,4 +26,4 @@
 * Prefer idiomatic, functional, vectorized Wolfram Language (`NumericArray`, `Developer`ToPackedArray`).
 * Ensure every text, code, and JSON file ends with a trailing newline `\n`.
 * Track all Wolfram Notebooks (`*.nb` in `Documentation/` and `notebooks/`) using Git LFS via `.gitattributes`.
-* The `.githooks/pre-commit` script (`wolframscript`) automatically increments the build number (`Major.Minor.Build`) across `PacletInfo.wl`, `version.json`, and `Kernel/init.wl` on commit.
+* The `.githooks/pre-commit` script (`wolframscript`) automatically increments the build number (`Major.Minor.Build`) across `PacletInfo.wl` and `Kernel/init.wl` on commit.
