@@ -49,12 +49,14 @@ lossTypeArg    = parseArg["--loss", None];
 rayBoundsStr   = parseArg["--ray-bounds", None];
 downsampleStr  = parseArg["--downsample", None];
 targetResStr   = parseArg["--res", None];
-fgRatioStr     = parseArg["--sample-fg-ratio", "0.7"];
+samplesStr     = parseArg["--samples", None];
+fgRatioStr     = parseArg["--sample-fg-ratio", "0.5"];
 whiteBgStr     = parseArg["--white-bg", "True"];
 maxViewsStr    = parseArg["--max-views", None];
 bandsStr       = parseArg["--bands", None];
 hiddenDimStr   = parseArg["--hidden-dim", None];
 layersStr      = parseArg["--layers", None];
+weightOpStr    = parseArg["--weight-opacity", "0.0"];
 outPath        = parseArg["--output", None];
 testImgPath    = parseArg["--render-test", None];
 compareValPath = parseArg["--compare-val", None];
@@ -71,18 +73,33 @@ rounds = ToExpression[roundsStr];
 batchSize = ToExpression[batchSizeStr];
 lr = ToExpression[lrStr];
 fgRatio = ToExpression[fgRatioStr];
+weightOpacity = ToExpression[weightOpStr];
 whiteBg = MemberQ[{"true", "1", "yes"}, ToLowerCase[ToString[whiteBgStr]]];
 maxViews = If[maxViewsStr =!= None, ToExpression[maxViewsStr], All];
 
-(* Device selection: on macOS ARM64, CPU is native and fastest for NetTrain *)
+(* Device selection *)
 device = Which[
   MemberQ[{"gpu", "cuda"}, ToLowerCase[deviceArg]] && $SystemID === "MacOSX-ARM64",
     Print["Note: macOS ARM64 uses native vector CPU for NetTrain. Setting device to CPU."];
     "CPU",
+  MemberQ[{"gpu2", "cuda2", "secondary", "dedicated"}, ToLowerCase[deviceArg]],
+    {"GPU", 2},
+  MemberQ[{"gpu1", "cuda1", "primary"}, ToLowerCase[deviceArg]],
+    {"GPU", 1},
+  MemberQ[{"multigpu", "allgpu", "dual-gpu", "dual"}, ToLowerCase[deviceArg]],
+    "MultiGPU",
+  MemberQ[{"gpu", "cuda"}, ToLowerCase[deviceArg]],
+    (* On multi-GPU Linux systems, target dedicated GPU 2 to avoid Xorg display contention *)
+    {"GPU", 2},
   ToLowerCase[deviceArg] === "automatic",
-    If[$SystemID === "MacOSX-ARM64", "CPU", "GPU"],
+    If[$SystemID === "MacOSX-ARM64", "CPU", {"GPU", 2}],
   True,
     deviceArg
+];
+
+renderDevice = Which[
+  device === "MultiGPU", "GPU",
+  True, device
 ];
 
 Print["[1/4] Loading views from: ", datasetPath];
@@ -99,20 +116,26 @@ lossType = Which[
 
 bands = Which[
   bandsStr =!= None, ToExpression[bandsStr],
-  (isNeRFDataset || isJSONFile), 8,
+  (isNeRFDataset || isJSONFile), 10,
   True, 6
 ];
 
 hiddenDim = Which[
   hiddenDimStr =!= None, ToExpression[hiddenDimStr],
-  (isNeRFDataset || isJSONFile), 96,
+  (isNeRFDataset || isJSONFile), 128,
   True, 64
 ];
 
 numLayers = Which[
   layersStr =!= None, ToExpression[layersStr],
-  (isNeRFDataset || isJSONFile), 3,
+  (isNeRFDataset || isJSONFile), 4,
   True, 2
+];
+
+numSamples = Which[
+  samplesStr =!= None, ToExpression[samplesStr],
+  (isNeRFDataset || isJSONFile), 64,
+  True, 32
 ];
 
 upAxis = Which[
@@ -169,13 +192,13 @@ rayBounds = Which[
     {3.0, 10.0}
 ];
 Print["      Volumetric Ray Bounds: [", rayBounds[[1]], ", ", rayBounds[[2]], "] | Loss: ", lossType];
-Print["      Architecture: ", bands, " bands (harmonic), ", hiddenDim, " hidden dim, ", numLayers, " layers, up-axis: ", upAxis];
+Print["      Architecture: ", numSamples, " samples/ray, ", bands, " bands (harmonic), ", hiddenDim, " hidden dim, ", numLayers, " layers, up-axis: ", upAxis];
 
 bgColor = Lookup[views[[1]], "BackgroundColor", If[whiteBg, {1., 1., 1.}, None]];
 
 Print["[2/4] Initializing NeRFLite coordinate MLP (embedded volumetric quadrature)..."];
 fieldNet = NetInitialize @ CreateNeRFLiteNet[
-  "NumSamples" -> 32,
+  "NumSamples" -> numSamples,
   "HarmonicBands" -> bands,
   "HiddenDim" -> hiddenDim,
   "NumLayers" -> numLayers,
@@ -194,6 +217,7 @@ trainedModel = TrainNeRFLiteModel[
   "Loss" -> lossType,
   "RayBounds" -> rayBounds,
   "SampleForegroundRatio" -> fgRatio,
+  "WeightOpacity" -> weightOpacity,
   "TargetDevice" -> device,
   "TrainingProgressReporting" -> "Compact"
 ];
@@ -218,7 +242,7 @@ If[StringQ[testImgPath] && testImgPath =!= "",
     views[[1]]["Dimensions"],
     "FOV" -> views[[1]]["FOV"],
     "RayBounds" -> rayBounds,
-    "TargetDevice" -> device
+    "TargetDevice" -> renderDevice
   ];
   Export[testImgPath, testImg];
 ];
@@ -241,7 +265,7 @@ If[StringQ[compareValPath] && compareValPath =!= "",
         vVal["Dimensions"],
         "FOV" -> vVal["FOV"],
         "RayBounds" -> rayBounds,
-        "TargetDevice" -> device
+        "TargetDevice" -> renderDevice
       ];
       gtImg = Image[vVal["RGB"], "Real32", ColorSpace -> "RGB"];
       {w, h} = ImageDimensions[gtImg];
@@ -277,7 +301,7 @@ If[StringQ[turntablePath] && turntablePath =!= "",
     "UpAxis" -> upAxis,
     "FOV" -> views[[1]]["FOV"],
     "RayBounds" -> rayBounds,
-    "TargetDevice" -> device,
+    "TargetDevice" -> renderDevice,
     "ExportFile" -> turntablePath
   ];
 ];

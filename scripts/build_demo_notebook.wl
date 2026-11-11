@@ -47,7 +47,8 @@ Print[\"Wolfram Kernel: \", $Version];
 Print[\"System ID: \", $SystemID];"],
     createInputCell["device = Which[
   $SystemID === \"MacOSX-ARM64\", \"CPU\",
-  True, \"Automatic\"
+  $SystemID === \"Linux-x86-64\" && Length[CUDAInformation[]] >= 2, {\"GPU\", 2},
+  True, \"GPU\"
 ];
 
 Print[\"Selected TargetDevice: \", device];"]
@@ -110,10 +111,10 @@ VisualizeNeRFCameraRig[trainViews, \"FrustumScale\" -> 0.35]"]
     createTextCell["In classical NeRF, continuous volumetric radiative transfer along each camera ray r(t) = o + t d is discretized into numerical quadrature:\n\n   C(r) = Sum[T_i alpha_i c_i, {i, 1, N}]\n   T_i = Exp[-Sum[sigma_j delta_j, {j, 1, i-1}]]\n   alpha_i = 1 - Exp[-sigma_i delta_i]\n\nWLNeRFLite embeds this numerical integration directly into the MXNet computation graph using a strict lower-triangular matrix layer (trilStrict). Rays and samples are evaluated entirely on the target device with zero CPU-GPU transfer bottlenecks."],
     createInputCell["(* Instantiate coordinate MLP with harmonic positional encoding and embedded quadrature *)
 fieldNet = NetInitialize @ CreateNeRFLiteNet[
-  \"NumSamples\" -> 32,
-  \"HarmonicBands\" -> 8,
-  \"HiddenDim\" -> 96,
-  \"NumLayers\" -> 3,
+  \"NumSamples\" -> 64,
+  \"HarmonicBands\" -> 10,
+  \"HiddenDim\" -> 128,
+  \"NumLayers\" -> 4,
   \"BackgroundColor\" -> {1., 1., 1.},
   \"ColorActivation\" -> LogisticSigmoid
 ]"]
@@ -122,19 +123,19 @@ fieldNet = NetInitialize @ CreateNeRFLiteNet[
   (* Section 5 *)
   Cell[CellGroupData[{
     createSectionCell["5. NeRF Model Training"],
-    createTextCell["Train the coordinate field using TrainNeRFLiteModel. Standard synthetic NeRF objects are centered at the origin with camera distances around 4.0 units, corresponding to ray near/far bounds of [2.0, 6.0]. We sample 70% of training rays from foreground regions to accelerate reconstruction of fine geometric details."],
+    createTextCell["Train the coordinate field using TrainNeRFLiteModel. Standard synthetic NeRF objects are centered at the origin with camera distances around 4.0 units, corresponding to ray near/far bounds of [2.0, 6.0]. We balance foreground and background rays evenly (50/50) to suppress empty-space floaters while recovering fine geometric details."],
     createInputCell["(* Train the NeRF model using NetTrain with real-time interactive panel *)
 tStart = AbsoluteTime[];
 
 trainedModel = TrainNeRFLiteModel[
   fieldNet,
   trainViews,
-  \"BatchSize\" -> 1024,
-  \"MaxTrainingRounds\" -> 2000,
+  \"BatchSize\" -> 2048,
+  \"MaxTrainingRounds\" -> 5000,
   \"LearningRate\" -> 0.001,
   \"Loss\" -> \"L2\",
   \"RayBounds\" -> {2.0, 6.0},
-  \"SampleForegroundRatio\" -> 0.7,
+  \"SampleForegroundRatio\" -> 0.5,
   \"TargetDevice\" -> device,
   \"TrainingProgressReporting\" -> \"Panel\"
 ];
