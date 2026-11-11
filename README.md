@@ -22,7 +22,8 @@
    * 6-band harmonic positional encoder ($3 \rightarrow 39$ dims).
    * 2-layer MLP with 64 hidden units and `LogisticSigmoid` color activation.
    * Fully differentiable volumetric quadrature integration embedded inside `NetGraph`.
-4. **Command-Line Suite**:
+4. **Command-Line Suite & Interactive Demo Notebook**:
+   * `notebooks/WLNeRFLiteDemo.nb`: Full interactive Mathematica demonstration notebook walking through dataset downloading, camera rig visualization, NetGraph compilation, model training, validation PSNR/MSE benchmarking, 360° turntable generation, and 3D density field sampling.
    * `scripts/convert_exr_to_nerf_json.wl`: Converts RenderMan EXRs to standard NeRF JSON folders with split generation (`train`, `val`, `test`).
    * `scripts/train_nerflite.wl`: Standalone CLI training with compact progress reporting, checkpoint export, and test turntable generation.
    * `scripts/download_lego_data.py`: High-speed CDN downloader for the canonical synthetic NeRF Lego benchmark dataset.

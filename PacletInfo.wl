@@ -1,8 +1,8 @@
 PacletObject[
   <|
     "Name" -> "WLNeRFLite",
-    "Version" -> "1.2.12",
-    "BuildNumber" -> "12",
+    "Version" -> "1.2.14",
+    "BuildNumber" -> "14",
     "WolframVersion" -> "13.0+",
     "Creator" -> "FXP",
     "Description" -> "Standalone Ultra-Lightweight Neural Radiance Fields in Wolfram Language supporting standard NeRF JSON (transforms.json) datasets and RenderMan EXR archives.",
