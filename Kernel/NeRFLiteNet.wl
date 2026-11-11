@@ -3,11 +3,8 @@
 BeginPackage["WLNeRFLite`Net`", {"NeuralNetworks`"}];
 
 CreateHarmonicEncoder::usage = "CreateHarmonicEncoder[numBands:6] creates a differentiable positional encoding net mapping {3} to {3 * (1 + 2*numBands)}.";
-CreateNeRFLiteNet::usage = "CreateNeRFLiteNet[opts] constructs a super lightweight NeRF NetGraph with embedded harmonic encoder and differentiable volumetric quadrature.";
+CreateNeRFLiteNet::usage = "CreateNeRFLiteNet[opts] constructs a lightweight NeRF NetGraph with embedded harmonic encoder and differentiable volumetric quadrature.";
 CreateNeRFLiteTrainingNet::usage = "CreateNeRFLiteTrainingNet[fieldNet, opts] wraps a NeRF prediction NetGraph with photometric loss.";
-CreateLogL1LossNet::usage = "CreateLogL1LossNet[] constructs a tonemapped L1 loss net for HDR radiance using log(1 + x).";
-CreateLogL2LossNet::usage = "CreateLogL2LossNet[] constructs a tonemapped L2 loss net for HDR radiance using log(1 + x).";
-CreateTonemappedL1LossNet::usage = "CreateTonemappedL1LossNet[] constructs a Reinhard tonemapped L1 loss net.";
 ExtractNeRFLiteDensityNet::usage = "ExtractNeRFLiteDensityNet[net] extracts the point density evaluation subnet mapping {3} -> {1}.";
 ExtractNeRFLiteColorNet::usage = "ExtractNeRFLiteColorNet[net] extracts the point RGB evaluation subnet mapping {3} -> {3}.";
 
@@ -91,7 +88,7 @@ Options[CreateNeRFLiteNet] = {
   "NumLayers" -> 2,
   "SkipConnection" -> Automatic,
   "ColorActivation" -> LogisticSigmoid,
-  "BackgroundColor" -> None, (* None, Automatic (RenderMan studio grey {0.388, 0.337, 0.298}), or custom {r, g, b} *)
+  "BackgroundColor" -> None,
   "IncludeDepth" -> False
 };
 
@@ -231,47 +228,8 @@ CreateNeRFLiteNet[opts : OptionsPattern[]] := Module[{
   ]
 ];
 
-CreateLogL1LossNet[] := NetGraph[
-  <|
-    "log_pred" -> ElementwiseLayer[Log[1.0 + Max[#, 0.0]] &],
-    "log_target" -> ElementwiseLayer[Log[1.0 + Max[#, 0.0]] &],
-    "l1" -> MeanAbsoluteLossLayer[]
-  |>,
-  {
-    NetPort["Input"] -> "log_pred",
-    NetPort["Target"] -> "log_target",
-    {"log_pred", "log_target"} -> "l1" -> NetPort["Output"]
-  }
-];
-
-CreateLogL2LossNet[] := NetGraph[
-  <|
-    "log_pred" -> ElementwiseLayer[Log[1.0 + Max[#, 0.0]] &],
-    "log_target" -> ElementwiseLayer[Log[1.0 + Max[#, 0.0]] &],
-    "l2" -> MeanSquaredLossLayer[]
-  |>,
-  {
-    NetPort["Input"] -> "log_pred",
-    NetPort["Target"] -> "log_target",
-    {"log_pred", "log_target"} -> "l2" -> NetPort["Output"]
-  }
-];
-
-CreateTonemappedL1LossNet[] := NetGraph[
-  <|
-    "tm_pred" -> ElementwiseLayer[Max[#, 0.0] / (1.0 + Max[#, 0.0]) &],
-    "tm_target" -> ElementwiseLayer[Max[#, 0.0] / (1.0 + Max[#, 0.0]) &],
-    "l1" -> MeanAbsoluteLossLayer[]
-  |>,
-  {
-    NetPort["Input"] -> "tm_pred",
-    NetPort["Target"] -> "tm_target",
-    {"tm_pred", "tm_target"} -> "l1" -> NetPort["Output"]
-  }
-];
-
 Options[CreateNeRFLiteTrainingNet] = {
-  "Loss" -> "LogL1", (* "LogL1", "L2", "L1", "LogL2", "SmoothL1", or "Tonemapped" *)
+  "Loss" -> "L2",
   "WeightOpacity" -> 0.0
 };
 
@@ -288,12 +246,8 @@ CreateNeRFLiteTrainingNet[fieldNet_NetGraph, opts : OptionsPattern[]] := Module[
   hasDepth = KeyExistsQ[inPorts, "SampleT"];
 
   lossLayer = Switch[lossType,
-    "LogL1" | "Log", CreateLogL1LossNet[],
-    "LogL2", CreateLogL2LossNet[],
-    "Tonemapped" | "Reinhard", CreateTonemappedL1LossNet[],
-    "L1", MeanAbsoluteLossLayer[],
-    "SmoothL1", MeanAbsoluteLossLayer[],
-    _, MeanSquaredLossLayer[]
+    "L1" | "SmoothL1", MeanAbsoluteLossLayer[],
+    "L2" | "MSE" | _, MeanSquaredLossLayer[]
   ];
 
   layers["nerf"] = fieldNet;
@@ -335,27 +289,33 @@ CreateNeRFLiteTrainingNet[fieldNet_NetGraph, opts : OptionsPattern[]] := Module[
   NetGraph[layers, edges, Sequence @@ portSpecs]
 ];
 
-ExtractNeRFLiteDensityNet[net_NetGraph] := Module[{encoder, backbone, linear, act},
-  encoder = Quiet @ Check[NetExtract[net, {"encoder", "Net"}], $Failed];
-  backbone = Quiet @ Check[NetExtract[net, {"backbone", "Net"}], $Failed];
-  linear = Quiet @ Check[NetExtract[net, {"density_linear", "Net"}], $Failed];
+ExtractNeRFLiteDensityNet[net_NetGraph] := Module[{coreNet, encoder, backbone, linear, act},
+  coreNet = Quiet @ Check[NetExtract[net, "nerf"], net];
+  If[!MatchQ[coreNet, _NetGraph], coreNet = net];
+
+  encoder = Quiet @ Check[NetExtract[coreNet, {"encoder", "Net"}], $Failed];
+  backbone = Quiet @ Check[NetExtract[coreNet, {"backbone", "Net"}], $Failed];
+  linear = Quiet @ Check[NetExtract[coreNet, {"density_linear", "Net"}], $Failed];
   act = ElementwiseLayer["SoftPlus"];
-  
+
   If[MatchQ[encoder, _NetGraph | _NetChain] && MatchQ[backbone, _NetGraph | _NetChain] && MatchQ[linear, _LinearLayer],
     NetChain[{encoder, backbone, linear, act}, "Input" -> 3],
     $Failed
   ]
 ];
 
-ExtractNeRFLiteColorNet[net_NetGraph] := Module[{encoder, backbone, linear, act},
-  encoder = Quiet @ Check[NetExtract[net, {"encoder", "Net"}], $Failed];
-  backbone = Quiet @ Check[NetExtract[net, {"backbone", "Net"}], $Failed];
-  linear = Quiet @ Check[NetExtract[net, {"color_linear", "Net"}], $Failed];
-  act = Quiet @ Check[NetExtract[net, "color_act"], ElementwiseLayer[LogisticSigmoid]];
-  
+ExtractNeRFLiteColorNet[net_NetGraph] := Module[{coreNet, encoder, backbone, linear, actFn},
+  coreNet = Quiet @ Check[NetExtract[net, "nerf"], net];
+  If[!MatchQ[coreNet, _NetGraph], coreNet = net];
+
+  encoder = Quiet @ Check[NetExtract[coreNet, {"encoder", "Net"}], $Failed];
+  backbone = Quiet @ Check[NetExtract[coreNet, {"backbone", "Net"}], $Failed];
+  linear = Quiet @ Check[NetExtract[coreNet, {"color_linear", "Net"}], $Failed];
+  actFn = Quiet @ Check[NetExtract[coreNet, {"color_act", "Function"}], $Failed];
+
   If[MatchQ[encoder, _NetGraph | _NetChain] && MatchQ[backbone, _NetGraph | _NetChain] && MatchQ[linear, _LinearLayer],
-    If[act =!= $Failed && MatchQ[act, _ElementwiseLayer],
-      NetChain[{encoder, backbone, linear, act}, "Input" -> 3],
+    If[actFn =!= $Failed && actFn =!= None,
+      NetChain[{encoder, backbone, linear, ElementwiseLayer[actFn]}, "Input" -> 3],
       NetChain[{encoder, backbone, linear}, "Input" -> 3]
     ],
     $Failed

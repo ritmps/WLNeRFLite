@@ -8,18 +8,17 @@ BeginPackage["WLNeRFLite`Visualizer`", {
 
 RenderNeRFLiteView::usage = "RenderNeRFLiteView[net, cameraMatrix, {w, h}, opts] renders a 2D image from a trained lightweight NeRF.";
 RenderNeRFLiteTurntable::usage = "RenderNeRFLiteTurntable[net, opts] renders a 360-degree orbiting turntable animation.";
-SampleNeRFLiteDensityVolume::usage = "SampleNeRFLiteDensityVolume[densityNet, {xRange, yRange, zRange}, res] samples a 3D density grid for volume visualization.";
+SampleNeRFLiteDensityVolume::usage = "SampleNeRFLiteDensityVolume[net, bounds, res, opts] samples a 3D density grid for volume and isosurface visualization.";
 VisualizeNeRFCameraRig::usage = "VisualizeNeRFCameraRig[views, opts] creates an interactive 3D visualization of camera frustums, positions, and bounds in world space.";
 
 Begin["`Private`"];
 
 Options[RenderNeRFLiteView] = {
-  "FOV" -> 48.0,
-  "RayBounds" -> {3.0, 10.0},
+  "FOV" -> 50.0,
+  "RayBounds" -> {2.0, 6.0},
   "NumSamples" -> 32,
   "ChunkSize" -> 4096,
-  "TargetDevice" -> "GPU",
-  "Tonemap" -> Automatic,
+  "TargetDevice" -> Automatic,
   "Return" -> "Image"
 };
 
@@ -28,21 +27,26 @@ RenderNeRFLiteView[net_NetGraph, matrix_?MatrixQ, {w_Integer, h_Integer}, opts :
   rayBounds = OptionValue["RayBounds"],
   numSamples = OptionValue["NumSamples"],
   chunkSize = OptionValue["ChunkSize"],
-  device = OptionValue["TargetDevice"],
+  deviceOpt = OptionValue["TargetDevice"],
   returnType = OptionValue["Return"],
-  tonemapOpt = OptionValue["Tonemap"],
-  tNear, tFar, rays, nRays, chunks, allRGB = {}, allDepth = {}, allOpacity = {},
+  device, tNear, tFar, rays, nRays, chunks, allRGB = {}, allDepth = {}, allOpacity = {},
   inPorts, hasDepth, evalNet
 },
+  device = If[deviceOpt === Automatic,
+    If[$SystemID === "MacOSX-ARM64", "CPU", "GPU"],
+    deviceOpt
+  ];
   {tNear, tFar} = N[rayBounds];
-  inPorts = Quiet @ Information[net, "InputPorts"];
+  evalNet = Quiet @ Check[NetExtract[net, "nerf"], net];
+  If[!MatchQ[evalNet, _NetGraph], evalNet = net];
+
+  inPorts = Quiet @ Information[evalNet, "InputPorts"];
   If[AssociationQ[inPorts] && KeyExistsQ[inPorts, "Steps"], numSamples = Flatten[{inPorts["Steps"]}][[1]]];
   hasDepth = AssociationQ[inPorts] && KeyExistsQ[inPorts, "SampleT"];
 
   rays = GenerateCameraRays[matrix, {w, h}, "FOV" -> fov];
   nRays = Length[rays["Origins"]];
 
-  evalNet = net;
   chunks = Partition[Range[nRays], UpTo[chunkSize]];
 
   Do[
@@ -69,21 +73,9 @@ RenderNeRFLiteView[net_NetGraph, matrix_?MatrixQ, {w_Integer, h_Integer}, opts :
 
   Module[{
     rawRgb = Developer`ToPackedArray[N[ArrayReshape[allRGB, {h, w, 3}]]],
-    rgbArray, depthArray, opacityArray
+    rgbArray
   },
-    rgbArray = Switch[tonemapOpt,
-      "Reinhard",
-        Module[{pos = Clip[rawRgb, {0.0, Infinity}]}, pos / (1.0 + pos)],
-      "Clip",
-        Clip[rawRgb, {0.0, 1.0}],
-      "None",
-        rawRgb,
-      _,
-        If[Max[rawRgb] > 1.05,
-          Module[{pos = Clip[rawRgb, {0.0, Infinity}]}, pos / (1.0 + pos)],
-          Clip[rawRgb, {0.0, 1.0}]
-        ]
-    ];
+    rgbArray = Clip[rawRgb, {0.0, 1.0}];
 
     Switch[returnType,
       "RGB",
@@ -106,13 +98,9 @@ RenderNeRFLiteView[net_NetGraph, matrix_?MatrixQ, {w_Integer, h_Integer}, opts :
 ];
 
 makeTurntableMatrix[center_List, radius_?NumericQ, elevation_?NumericQ, azimuth_?NumericQ, upAxis_String : "Z"] := Module[{
-  pos, forward, right, up, c2w, axis, worldUp
+  pos, forward, right, up, axis, worldUp
 },
-  axis = Which[
-    MemberQ[{"z", "z-up", "nerf"}, ToLowerCase[upAxis]], "Z",
-    MemberQ[{"y", "y-up", "renderman"}, ToLowerCase[upAxis]], "Y",
-    True, "Z"
-  ];
+  axis = If[MemberQ[{"y", "y-up"}, ToLowerCase[upAxis]], "Y", "Z"];
 
   If[axis === "Z",
     worldUp = {0., 0., 1.};
@@ -134,26 +122,27 @@ makeTurntableMatrix[center_List, radius_?NumericQ, elevation_?NumericQ, azimuth_
   right = Normalize[Cross[forward, worldUp]];
   up = Normalize[Cross[right, forward]];
 
-  c2w = {
-    {right[[1]], right[[2]], right[[3]], 0.},
-    {up[[1]], up[[2]], up[[3]], 0.},
-    {forward[[1]], forward[[2]], forward[[3]], 0.},
-    {pos[[1]], pos[[2]], pos[[3]], 1.}
-  };
-  Inverse[c2w]
+  (* Standard NeRF / OpenGL camera-to-world (c2w) matrix:
+     Col 1: Right (+X), Col 2: Up (+Y), Col 3: -Forward (+Z), Col 4: Position *)
+  Developer`ToPackedArray @ N @ {
+    {right[[1]], up[[1]], -forward[[1]], pos[[1]]},
+    {right[[2]], up[[2]], -forward[[2]], pos[[2]]},
+    {right[[3]], up[[3]], -forward[[3]], pos[[3]]},
+    {0., 0., 0., 1.}
+  }
 ];
 
 Options[RenderNeRFLiteTurntable] = Join[
   {
     "NumFrames" -> 36,
     "Radius" -> 4.0,
-    "Elevation" -> 25.0 * Degree,
+    "Elevation" -> 30.0 * Degree,
     "Target" -> {0., 0., 0.},
     "UpAxis" -> "Z",
     "Resolution" -> {256, 256},
     "FOV" -> 40.0,
     "ChunkSize" -> 4096,
-    "TargetDevice" -> "GPU",
+    "TargetDevice" -> Automatic,
     "ExportFile" -> None
   },
   Options[RenderNeRFLiteView]
@@ -198,14 +187,34 @@ RenderNeRFLiteTurntable[net_NetGraph, opts : OptionsPattern[]] := Module[{
 ];
 
 Options[SampleNeRFLiteDensityVolume] = {
-  "TargetDevice" -> "GPU",
+  "Bounds" -> {{-1.2, 1.2}, {-1.2, 1.2}, {-1.2, 1.2}},
+  "Resolution" -> 32,
+  "TargetDevice" -> Automatic,
   "BatchSize" -> 16384
 };
 
-SampleNeRFLiteDensityVolume[densityNet_NetChain, {xRange_, yRange_, zRange_}, res_Integer: 32, opts : OptionsPattern[]] := Module[{
-  xs, ys, zs, grid, pts, nPts, chunks, allSigma = {}, device = OptionValue["TargetDevice"],
-  bs = OptionValue["BatchSize"]
+SampleNeRFLiteDensityVolume[net : (_NetGraph | _NetChain), opts : OptionsPattern[]] :=
+  SampleNeRFLiteDensityVolume[net, OptionValue["Bounds"], OptionValue["Resolution"], opts];
+
+SampleNeRFLiteDensityVolume[net : (_NetGraph | _NetChain), {xRange_List, yRange_List, zRange_List}, res_Integer: 32, opts : OptionsPattern[]] := Module[{
+  densityNet, xs, ys, zs, grid, pts, nPts, chunks, allSigma = {},
+  deviceOpt = OptionValue["TargetDevice"],
+  bs = OptionValue["BatchSize"],
+  device
 },
+  device = If[deviceOpt === Automatic,
+    If[$SystemID === "MacOSX-ARM64", "CPU", "GPU"],
+    deviceOpt
+  ];
+
+  densityNet = If[MatchQ[net, _NetGraph],
+    ExtractNeRFLiteDensityNet[net],
+    net
+  ];
+  If[!MatchQ[densityNet, _NetChain | _NetGraph],
+    Return[$Failed]
+  ];
+
   xs = Subdivide[N[xRange[[1]]], N[xRange[[2]]], res - 1];
   ys = Subdivide[N[yRange[[1]]], N[yRange[[2]]], res - 1];
   zs = Subdivide[N[zRange[[1]]], N[zRange[[2]]], res - 1];
@@ -258,9 +267,9 @@ VisualizeNeRFCameraRig[views_List, opts : OptionsPattern[]] := Module[{
     Module[{
       v = views[[i]], camMat, fov, dim, raysCorner, pos, c1, c2, c3, c4, col
     },
-      camMat = Lookup[v, "CameraMatrix", Lookup[v, "NeRFMatrix", None]];
+      camMat = Lookup[v, "CameraMatrix", None];
       If[!MatrixQ[camMat, NumericQ], Continue[]];
-      fov = Lookup[v, "FOV", 48.0];
+      fov = Lookup[v, "FOV", 50.0];
       dim = Lookup[v, "Dimensions", {512, 512}];
 
       raysCorner = GenerateCameraRays[camMat, dim, "FOV" -> fov, "PixelCoords" -> {

@@ -2,375 +2,156 @@
 
 BeginPackage["WLNeRFLite`Data`"];
 
-LoadNeRFDataset::usage = "LoadNeRFDataset[pathOrDir, opts] loads a standard NeRF synthetic / Instant-NGP / Nerfstudio dataset specified by transforms.json (or transforms_train.json) with PNG/JPG/TIFF/EXR images.";
-ExportNeRFDataset::usage = "ExportNeRFDataset[views, outputDir, opts] exports a list of camera views into canonical NeRF synthetic format with transforms.json (and optional train/val/test splits) and standard images.";
-RenderManToNeRFTransform::usage = "RenderManToNeRFTransform[w2c] converts a RenderMan 4x4 row-major world-to-camera matrix to a standard NeRF 4x4 camera-to-world (c2w) matrix (OpenGL +X right, +Y up, -Z look).";
-NeRFToRenderManTransform::usage = "NeRFToRenderManTransform[c2w] converts a standard NeRF 4x4 camera-to-world matrix to a RenderMan 4x4 row-major world-to-camera (w2c) matrix.";
-LoadRenderManEXRView::usage = "LoadRenderManEXRView[exrPath, opts] loads camera transforms directly from RenderMan EXR headers and imports only denoised beauty (if present) or beauty RGB.";
-LoadRenderManEXRViews::usage = "LoadRenderManEXRViews[pathsOrDir, opts] loads a collection of RenderMan EXR views ready for NeRF training.";
-GenerateCameraRays::usage = "GenerateCameraRays[cameraMatrix, {w, h}, opts] returns ray origins and normalized world directions for a camera (auto-detects RenderMan w2c or NeRF c2w).";
+DownloadNeRFDataset::usage = "DownloadNeRFDataset[targetDir, opts] downloads a canonical synthetic NeRF dataset (such as \"lego\", \"chair\", \"drums\", \"ficus\", \"hotdog\", \"materials\", \"mic\", or \"ship\") including camera transforms JSON files and split images.";
+LoadNeRFDataset::usage = "LoadNeRFDataset[pathOrDir, opts] loads a standard NeRF dataset specified by transforms.json (or transforms_train.json) with PNG/JPG/TIFF images and 4x4 camera-to-world pose matrices.";
+ExportNeRFDataset::usage = "ExportNeRFDataset[views, outputDir, opts] exports a list of camera views into canonical NeRF format with transforms.json (and optional train/val/test splits) and images.";
+GenerateCameraRays::usage = "GenerateCameraRays[cameraMatrix, {w, h}, opts] returns ray origins and normalized world directions for a 4x4 camera-to-world (c2w) matrix.";
 SampleRaysStratified::usage = "SampleRaysStratified[origins, directions, numSamples, {tNear, tFar}, opts] computes stratified 3D sample points and intervals along rays.";
 PrecomputeNeRFLiteRayPool::usage = "PrecomputeNeRFLiteRayPool[views, opts] precomputes camera rays and RGB targets across views into a high-performance in-memory ray pool.";
 
 Begin["`Private`"];
 
 (* ========================================================================= *)
-(* 1. Bidirectional Camera Matrix Transforms (RenderMan <-> NeRF)            *)
+(* 1. Pure Wolfram Language NeRF Synthetic Dataset Downloader                *)
 (* ========================================================================= *)
 
-RenderManToNeRFTransform[w2c_?MatrixQ] := Module[{inv, c2w},
-  inv = Inverse[w2c];
-  c2w = Transpose[inv];
-  c2w[[All, 3]] = -c2w[[All, 3]];
-  Developer`ToPackedArray[N[c2w]]
-];
+$CanonicalNeRFScenes = {"lego", "chair", "drums", "ficus", "hotdog", "materials", "mic", "ship"};
+$NeRFDatasetBaseURL = "https://huggingface.co/datasets/rishitdagli/nerf-gs-datasets/resolve/main";
 
-NeRFToRenderManTransform[c2w_?MatrixQ] := Module[{c2wMod, inv, w2c},
-  c2wMod = c2w;
-  c2wMod[[All, 3]] = -c2wMod[[All, 3]];
-  inv = Transpose[c2wMod];
-  w2c = Inverse[inv];
-  Developer`ToPackedArray[N[w2c]]
-];
-
-(* ========================================================================= *)
-(* 2. Binary EXR Header Parsing (Zero External CLI Dependencies)             *)
-(* ========================================================================= *)
-
-findEXRTool[name_String] := Module[{paths},
-  paths = {
-    "/opt/pixar/RenderManProServer-28.0b1/bin/exrinfo",
-    "/opt/pixar/RenderManProServer-28.0b1/bin/" <> name,
-    FileNameJoin[{"/opt", "homebrew", "bin", name}],
-    FileNameJoin[{"/usr", "local", "bin", name}],
-    FileNameJoin[{"/usr", "bin", name}],
-    name
-  };
-  SelectFirst[paths, FileExistsQ[#] &, name]
-];
-
-getEXRHeaderText[path_String] := Module[{tool},
-  tool = SelectFirst[{
-    findEXRTool["exrinfo"],
-    findEXRTool["exrheader"]
-  }, FileExistsQ[#] &, "exrinfo"];
-  Quiet @ Check[RunProcess[{tool, path}, "StandardOutput"], ""]
-];
-
-parseSciNumberString[str_String] := Module[{normalized, val},
-  normalized = StringReplace[StringTrim[str], 
-    RegularExpression["(?i)e\\+?(-?)0*(\\d+)"] :> "*^$1$2"
-  ];
-  val = Quiet @ Check[ToExpression @ normalized, Missing["NotANumber", str]];
-  If[NumericQ[val], N[val], Indeterminate]
-];
-
-parseEXRMatrix[headerText_String, key_String] := Module[{match, rows, mat},
-  match = StringCases[headerText, RegularExpression["(?mis)^\\Q" <> key <> "\\E\\s*\\(type\\s+m44f\\):\\s*\\((.*?)\\)"] :> "$1"];
-  If[match === {},
-    Missing["KeyAbsent", key],
-    rows = StringSplit[StringTrim @ First[match], "\n"];
-    mat = parseSciNumberString /@ StringSplit[StringTrim[#], Whitespace..] & /@ rows;
-    If[MatrixQ[mat, NumericQ] && Det[mat] != 0,
-      Developer`ToPackedArray[N[mat]],
-      IdentityMatrix[4]
-    ]
-  ]
-];
-
-parseEXRVector[headerText_String, key_String] := Module[{match, vec},
-  match = StringCases[headerText, RegularExpression["(?mi)^\\Q" <> key <> "\\E\\s*\\(type\\s+v3f\\):\\s*\\(([^\\)]*)\\)"] :> "$1"];
-  If[match === {},
-    Missing["KeyAbsent", key],
-    vec = parseSciNumberString /@ StringSplit[StringTrim @ First[match], Whitespace..];
-    If[VectorQ[vec, NumericQ], Developer`ToPackedArray[N[vec]], {0., 0., 0.}]
-  ]
-];
-
-readBinaryEXRHeaderAttributes[path_String] := Module[{
-  stream, magic, byte, name, type, size, startPos, endPos, attrs = <||>
-},
-  stream = Quiet @ OpenRead[path, BinaryFormat -> True];
-  If[stream === $Failed, Return[<||>]];
-
-  magic = BinaryReadList[stream, "Byte", 4];
-  If[magic =!= {118, 47, 49, 1},
-    Close[stream];
-    Return[<||>];
-  ];
-  BinaryReadList[stream, "Byte", 4];
-
-  While[True,
-    name = "";
-    While[(byte = BinaryRead[stream, "Byte"]) =!= EndOfFile && byte != 0,
-      name = name <> FromCharacterCode[byte];
-    ];
-    If[byte === EndOfFile || name == "", Break[]];
-
-    type = "";
-    While[(byte = BinaryRead[stream, "Byte"]) =!= EndOfFile && byte != 0,
-      type = type <> FromCharacterCode[byte];
-    ];
-    If[byte === EndOfFile, Break[]];
-
-    size = BinaryRead[stream, "UnsignedInteger32", ByteOrdering -> -1];
-    If[size === EndOfFile, Break[]];
-
-    startPos = StreamPosition[stream];
-    endPos = startPos + size;
-
-    Switch[type,
-      "m44f",
-        Module[{floats = BinaryReadList[stream, "Real32", 16, ByteOrdering -> -1]},
-          If[Length[floats] == 16,
-            attrs[name] = Developer`ToPackedArray[N @ Partition[floats, 4]];
-          ];
-        ],
-      "v3f",
-        Module[{vec = BinaryReadList[stream, "Real32", 3, ByteOrdering -> -1]},
-          If[Length[vec] == 3,
-            attrs[name] = Developer`ToPackedArray[N @ vec];
-          ];
-        ],
-      "float",
-        Module[{val = BinaryRead[stream, "Real32", ByteOrdering -> -1]},
-          If[NumericQ[val], attrs[name] = N[val]];
-        ],
-      "int",
-        Module[{ival = BinaryRead[stream, "Integer32", ByteOrdering -> -1]},
-          If[IntegerQ[ival], attrs[name] = ival];
-        ],
-      "string",
-        Module[{chars = BinaryReadList[stream, "Byte", size]},
-          attrs[name] = FromCharacterCode[chars];
-        ],
-      _,
-        Null
-    ];
-    SetStreamPosition[stream, endPos];
-  ];
-
-  Close[stream];
-  attrs
-];
-
-(* ========================================================================= *)
-(* 3. RenderMan EXR View Ingestion                                           *)
-(* ========================================================================= *)
-
-Options[LoadRenderManEXRView] = {
-  "Tonemap" -> "Reinhard",
-  "ExposureGamma" -> 1.0,
-  "ClipRGB" -> Automatic,
-  "CameraMatrix" -> Automatic,
-  "FOV" -> Automatic
+Options[DownloadNeRFDataset] = {
+  "Scene" -> Automatic,
+  "Splits" -> {"train", "val"},
+  "Overwrite" -> False
 };
 
-LoadRenderManEXRView[path_String, opts : OptionsPattern[]] := Module[{
-  hdr = "", binAttrs, w2c, fov, chNames, hasDenoised, chType, chData, r, g, b, h, w, rgb,
-  tonemapMode, clipOpt, effectiveTonemap, nonNegRgb, alphaRaw, alpha, fgPixels, bgColor,
-  exrioAvailable, nativeImg
+DownloadNeRFDataset[opts : OptionsPattern[]] := DownloadNeRFDataset[FileNameJoin[{"data", "lego"}], opts];
+
+DownloadNeRFDataset[scene_String, targetDir_String, opts : OptionsPattern[]] :=
+  DownloadNeRFDataset[targetDir, "Scene" -> scene, opts];
+
+DownloadNeRFDataset[arg_String, opts : OptionsPattern[]] := Module[{
+  sceneOpt = OptionValue["Scene"],
+  splitsOpt = OptionValue["Splits"],
+  overwriteQ = TrueQ @ OptionValue["Overwrite"],
+  isSceneNameOnly, scene, outDir, splits,
+  jsonFiles = <||>, relImagePaths = {}, missingURLs = {}, missingDests = {},
+  nCached = 0, nDownloaded = 0
 },
-  If[!FileExistsQ[path],
-    Return[Failure["FileNotFound", <|"Path" -> path|>]]
+  isSceneNameOnly = MemberQ[$CanonicalNeRFScenes, ToLowerCase[arg]] &&
+                    !StringContainsQ[arg, "/" | "\\"] &&
+                    !DirectoryQ[arg];
+
+  If[isSceneNameOnly,
+    scene = ToLowerCase[arg];
+    outDir = ExpandFileName[FileNameJoin[{"data", scene}]];
+    ,
+    outDir = ExpandFileName[arg];
+    scene = Which[
+      StringQ[sceneOpt], ToLowerCase[sceneOpt],
+      MemberQ[$CanonicalNeRFScenes, ToLowerCase[FileBaseName[outDir]]], ToLowerCase[FileBaseName[outDir]],
+      True, "lego"
+    ];
   ];
 
-  binAttrs = readBinaryEXRHeaderAttributes[path];
+  If[!DirectoryQ[outDir],
+    CreateDirectory[outDir, CreateIntermediateDirectories -> True];
+  ];
 
-  w2c = OptionValue["CameraMatrix"];
-  If[w2c === Automatic,
-    w2c = Lookup[binAttrs, "worldToCamera", None];
-    If[!MatrixQ[w2c, NumericQ],
-      hdr = getEXRHeaderText[path];
-      If[StringLength[hdr] > 0,
-        w2c = parseEXRMatrix[hdr, "worldToCamera"];
+  splits = Which[
+    splitsOpt === All || splitsOpt === "all" || (ListQ[splitsOpt] && MemberQ[ToLowerCase /@ ToString /@ splitsOpt, "all"]),
+      {"train", "val", "test"},
+    StringQ[splitsOpt],
+      {ToLowerCase[splitsOpt]},
+    ListQ[splitsOpt],
+      ToLowerCase /@ ToString /@ splitsOpt,
+    True,
+      {"train", "val"}
+  ];
+  splits = Select[splits, MemberQ[{"train", "val", "test"}, #] &];
+  If[splits === {}, splits = {"train", "val"}];
+
+  (* 1. Download split transforms_*.json files and collect frame image paths *)
+  Do[
+    Module[{
+      jfName = "transforms_" <> s <> ".json",
+      jfDest, jfURL, rawJson, frames
+    },
+      jfDest = FileNameJoin[{outDir, jfName}];
+      jfURL  = $NeRFDatasetBaseURL <> "/" <> scene <> "/" <> jfName;
+
+      If[overwriteQ || !FileExistsQ[jfDest] || Quiet[FileByteCount[jfDest]] === 0,
+        Quiet @ URLDownload[jfURL, jfDest];
       ];
-    ];
-    If[!MatrixQ[w2c, NumericQ],
-      Module[{eye = Lookup[binAttrs, "cam_eye", If[hdr =!= "", parseEXRVector[hdr, "cam_eye"], None]],
-              at  = Lookup[binAttrs, "cam_at",  If[hdr =!= "", parseEXRVector[hdr, "cam_at"], None]],
-              up  = Lookup[binAttrs, "cam_up",  If[hdr =!= "", parseEXRVector[hdr, "cam_up"], None]],
-              n, u, v},
-        If[VectorQ[eye, NumericQ] && VectorQ[at, NumericQ] && VectorQ[up, NumericQ],
-          n = Normalize[eye - at];
-          u = Normalize[Cross[up, n]];
-          v = Normalize[Cross[n, u]];
-          w2c = Developer`ToPackedArray @ N @ {
-            {u[[1]], v[[1]], -n[[1]], 0.},
-            {u[[2]], v[[2]], -n[[2]], 0.},
-            {u[[3]], v[[3]], -n[[3]], 0.},
-            {-u . eye, -v . eye, n . eye, 1.}
-          };
-        ]
-      ]
-    ];
-    If[!MatrixQ[w2c, NumericQ] || w2c == IdentityMatrix[4],
-      Return[Failure["MissingCameraMatrix", <|
-        "Message" -> "Could not extract valid non-identity camera transform from EXR header.",
-        "Path" -> path
-      |>]];
-    ];
-  ];
 
-  fov = OptionValue["FOV"];
-  If[fov === Automatic,
-    fov = Lookup[binAttrs, "fov", None];
-    If[!NumericQ[fov],
-      If[hdr === "", hdr = getEXRHeaderText[path]];
-      With[{m = StringCases[hdr, RegularExpression["(?mi)^fov\\s*\\(type\\s+float\\):\\s*(\\S+)"] :> "$1"]},
-        fov = If[Length[m] > 0, parseSciNumberString[First[m]], 48.0];
-      ]
-    ];
-  ];
-  If[!NumericQ[fov] || fov <= 0, fov = 48.0];
-
-  exrioAvailable = MemberQ[$Packages, "EXRIO`"] || NameQ["EXRIO`ImportEXRChannels"];
-  hasDenoised = False;
-  alphaRaw = None;
-
-  If[exrioAvailable,
-    Quiet @ Check[
-      chNames = Import[path, "ChannelNames"];
-      hasDenoised = KeyExistsQ[chNames, "denoised"] || 
-                    MemberQ[Flatten[Values[chNames]], "denoised.R"] || 
-                    MemberQ[Flatten[Values[chNames]], "denoised.r"];
-      chType = If[hasDenoised, "denoised", "default"];
-      chData = Import[path, {"ChannelData", chType}];
-      If[AssociationQ[chData],
-        r = Lookup[chData, "R", Lookup[chData, "r", None]];
-        g = Lookup[chData, "G", Lookup[chData, "g", None]];
-        b = Lookup[chData, "B", Lookup[chData, "b", None]];
-        alphaRaw = Lookup[chData, "A", Lookup[chData, "a", None]];
+      If[FileExistsQ[jfDest],
+        jsonFiles[s] = jfDest;
+        rawJson = Quiet @ Check[Developer`ReadRawJSONFile[jfDest], Import[jfDest, "RawJSON"]];
+        If[AssociationQ[rawJson],
+          frames = Lookup[rawJson, "frames", {}];
+          Do[
+            Module[{fp = Lookup[f, "file_path", ""], cleanRel},
+              If[StringQ[fp] && fp =!= "",
+                cleanRel = StringReplace[fp, RegularExpression["^\\./+"] -> ""];
+                If[FileExtension[cleanRel] === "", cleanRel = cleanRel <> ".png"];
+                AppendTo[relImagePaths, cleanRel];
+              ]
+            ],
+            {f, frames}
+          ];
+        ];
       ];
-      If[r =!= None && g =!= None && b =!= None,
-        {h, w} = Dimensions[r];
-        rgb = Developer`ToPackedArray @ Transpose[{Normal[r], Normal[g], Normal[b]}, {3, 1, 2}];
-      ],
-      Null
-    ];
-  ];
-
-  If[!ListQ[rgb],
-    nativeImg = Quiet @ Check[Import[path, "Image"], $Failed];
-    If[ImageQ[nativeImg],
-      {w, h} = ImageDimensions[nativeImg];
-      rgb = Developer`ToPackedArray @ N[ImageData[nativeImg, "Real32"]];
-      If[Length[Dimensions[rgb]] == 3 && Dimensions[rgb][[3]] >= 4,
-        alphaRaw = rgb[[All, All, 4]];
-        rgb = rgb[[All, All, 1 ;; 3]];
-      ];
-      hasDenoised = False;,
-      Return[Failure["ImageReadError", <|"Path" -> path|>]]
-    ];
-  ];
-
-  tonemapMode = OptionValue["Tonemap"];
-  clipOpt = OptionValue["ClipRGB"];
-
-  effectiveTonemap = Which[
-    tonemapMode === "Clip" || (clipOpt === True && (tonemapMode === Automatic || MissingQ[tonemapMode])), "Clip",
-    tonemapMode === "None" || (clipOpt === False && (tonemapMode === Automatic || MissingQ[tonemapMode])), "None",
-    tonemapMode === "Exposure", "Exposure",
-    tonemapMode === "Log", "Log",
-    StringQ[tonemapMode], tonemapMode,
-    True, "Reinhard"
-  ];
-
-  nonNegRgb = Clip[rgb, {0.0, Infinity}];
-  rgb = Switch[effectiveTonemap,
-    "Reinhard",
-      Developer`ToPackedArray @ N[nonNegRgb / (1.0 + nonNegRgb)],
-    "Clip",
-      Developer`ToPackedArray @ N[Clip[rgb, {0.0, 1.0}]],
-    "Exposure",
-      Module[{gamma = Replace[OptionValue["ExposureGamma"], Except[_?NumericQ] -> 1.0]},
-        Developer`ToPackedArray @ N[1.0 - Exp[-gamma * nonNegRgb]]
-      ],
-    "Log",
-      Module[{maxVal = Max[nonNegRgb]},
-        If[maxVal > 0.0,
-          Developer`ToPackedArray @ N[Log[1.0 + nonNegRgb] / Log[1.0 + maxVal]],
-          rgb
-        ]
-      ],
-    "None",
-      rgb,
-    _,
-      Developer`ToPackedArray @ N[nonNegRgb / (1.0 + nonNegRgb)]
-  ];
-
-  bgColor = Developer`ToPackedArray @ N[
-    (rgb[[1, 1]] + rgb[[1, w]] + rgb[[h, 1]] + rgb[[h, w]]) / 4.0
-  ];
-
-  alpha = If[alphaRaw =!= None,
-    Developer`ToPackedArray @ N[Normal[alphaRaw]],
-    None
-  ];
-
-  fgPixels = If[alpha =!= None,
-    Module[{pos = Position[alpha, _?(# > 0.1 &)]},
-      If[Length[pos] > 10,
-        Developer`ToPackedArray @ Map[{#[[2]] - 1, #[[1]] - 1} &, pos],
-        None
-      ]
     ],
-    None
+    {s, splits}
+  ];
+
+  relImagePaths = DeleteDuplicates[relImagePaths];
+
+  (* 2. Check cached vs missing frame images *)
+  Do[
+    Module[{destPath, subDir, url},
+      destPath = FileNameJoin[Prepend[FileNameSplit[relPath], outDir]];
+      subDir = DirectoryName[destPath];
+      If[!DirectoryQ[subDir],
+        CreateDirectory[subDir, CreateIntermediateDirectories -> True];
+      ];
+      If[!overwriteQ && FileExistsQ[destPath] && Quiet[FileByteCount[destPath]] > 0,
+        nCached++,
+        url = $NeRFDatasetBaseURL <> "/" <> scene <> "/" <> StringReplace[relPath, "\\" -> "/"];
+        AppendTo[missingURLs, url];
+        AppendTo[missingDests, destPath];
+      ];
+    ],
+    {relPath, relImagePaths}
+  ];
+
+  (* 3. Download missing images in concurrent chunks via URLDownload *)
+  If[Length[missingURLs] > 0,
+    Module[{urlChunks, destChunks},
+      urlChunks = Partition[missingURLs, UpTo[32]];
+      destChunks = Partition[missingDests, UpTo[32]];
+      MapThread[
+        Function[{uBatch, dBatch},
+          Quiet @ URLDownload[uBatch, dBatch];
+        ],
+        {urlChunks, destChunks}
+      ];
+      nDownloaded = Count[missingDests, _?(FileExistsQ[#] && Quiet[FileByteCount[#]] > 0 &)];
+    ];
   ];
 
   <|
-    "CameraMatrix" -> Developer`ToPackedArray[N[w2c]],
-    "NeRFMatrix" -> RenderManToNeRFTransform[w2c],
-    "FOV" -> N[fov],
-    "Dimensions" -> {w, h},
-    "Denoised" -> hasDenoised,
-    "Tonemap" -> effectiveTonemap,
-    "BackgroundColor" -> bgColor,
-    "RGB" -> rgb,
-    "Alpha" -> alpha,
-    "ForegroundPixels" -> fgPixels,
-    "File" -> path
+    "Directory" -> outDir,
+    "Scene" -> scene,
+    "Splits" -> splits,
+    "JSONFiles" -> jsonFiles,
+    "TotalFrames" -> Length[relImagePaths],
+    "DownloadedFiles" -> nDownloaded,
+    "CachedFiles" -> nCached
   |>
 ];
 
-Options[LoadRenderManEXRViews] = Join[
-  Options[LoadRenderManEXRView],
-  {
-    "MaxViews" -> All,
-    "Shuffle" -> False
-  }
-];
-
-LoadRenderManEXRViews[input_, opts : OptionsPattern[]] := Module[{
-  files, maxViews = OptionValue["MaxViews"], shuffleQ = OptionValue["Shuffle"], views
-},
-  files = Which[
-    ListQ[input],
-      Flatten[Map[If[StringQ[#] && (StringContainsQ[#, "*"] || StringContainsQ[#, "?"]), FileNames[#], {#}] &, input]],
-    StringQ[input] && DirectoryQ[input],
-      FileNames["*.exr", input],
-    StringQ[input] && (StringContainsQ[input, "*"] || StringContainsQ[input, "?"]),
-      FileNames[input],
-    StringQ[input] && FileExistsQ[input],
-      {input},
-    StringQ[input],
-      FileNames[input],
-    True,
-      {}
-  ];
-  files = Select[files, StringQ[#] && !StringContainsQ[#, ".crypto."] && FileExistsQ[#] &];
-
-  If[shuffleQ, files = RandomSample[files]];
-  If[IntegerQ[maxViews] && maxViews > 0,
-    files = Take[files, Min[maxViews, Length[files]]];
-  ];
-
-  views = Map[LoadRenderManEXRView[#, FilterRules[{opts}, Options[LoadRenderManEXRView]]] &, files];
-  Select[views, AssociationQ[#] && KeyExistsQ[#, "CameraMatrix"] &]
-];
-
 (* ========================================================================= *)
-(* 4. Standard NeRF Dataset Loader (transforms.json with PNG/JPG/TIFF/EXR)    *)
+(* 2. Standard NeRF Dataset Loader (transforms.json + PNG/JPG/TIFF)          *)
 (* ========================================================================= *)
 
 Options[LoadNeRFDataset] = {
@@ -379,21 +160,23 @@ Options[LoadNeRFDataset] = {
   "MaxViews" -> All,
   "Shuffle" -> False,
   "WhiteBackground" -> False,
-  "Tonemap" -> "None"
+  "AutoDownload" -> False
 };
 
 LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
   split = OptionValue["Split"],
   targetDim = OptionValue["TargetDimensions"],
   maxViews = OptionValue["MaxViews"],
-  shuffleQ = OptionValue["Shuffle"],
+  shuffleQ = TrueQ @ OptionValue["Shuffle"],
   whiteBg = TrueQ @ OptionValue["WhiteBackground"],
-  tonemapOpt = OptionValue["Tonemap"],
-  baseDir, jsonFile, rawJson, camAngleX, camAngleY, flX, flY, wGlob, hGlob,
-  cxGlob, cyGlob, frames, views = {}
+  autoDownload = TrueQ @ OptionValue["AutoDownload"],
+  baseDir, jsonFile, rawJson, camAngleX, flX, frames, views = {}
 },
   If[!FileExistsQ[pathOrDir] && !DirectoryQ[pathOrDir],
-    Return[Failure["PathNotFound", <|"Path" -> pathOrDir|>]]
+    If[autoDownload,
+      DownloadNeRFDataset[pathOrDir];,
+      Return[Failure["PathNotFound", <|"Path" -> pathOrDir|>]]
+    ];
   ];
 
   If[DirectoryQ[pathOrDir],
@@ -409,10 +192,13 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
         FileNameJoin[{baseDir, "transforms.json"}],
       Length[FileNames["transforms*.json", baseDir]] > 0,
         First[FileNames["transforms*.json", baseDir]],
+      autoDownload,
+        DownloadNeRFDataset[baseDir];
+        FileNameJoin[{baseDir, "transforms_train.json"}],
       True,
         Return[Failure["MissingTransformsJSON", <|"Directory" -> baseDir|>]]
-    ];,
-    (* Specific JSON file provided *)
+    ];
+    ,
     jsonFile = ExpandFileName[pathOrDir];
     baseDir = DirectoryName[jsonFile];
   ];
@@ -426,13 +212,7 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
   ];
 
   camAngleX = Lookup[rawJson, "camera_angle_x", None];
-  camAngleY = Lookup[rawJson, "camera_angle_y", None];
   flX = Lookup[rawJson, "fl_x", None];
-  flY = Lookup[rawJson, "fl_y", None];
-  wGlob = Lookup[rawJson, "w", None];
-  hGlob = Lookup[rawJson, "h", None];
-  cxGlob = Lookup[rawJson, "cx", None];
-  cyGlob = Lookup[rawJson, "cy", None];
 
   frames = Lookup[rawJson, "frames", {}];
   If[!ListQ[frames] || Length[frames] == 0,
@@ -447,7 +227,7 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
   Do[
     Module[{
       frame = frames[[i]], relPath, resolvedPath, img, rgb, alpha = None, fgPixels = None,
-      w, h, c2w, w2c, fov, rawData, bgColor
+      w, h, c2w, fov, rawData, bgColor
     },
       relPath = Lookup[frame, "file_path", ""];
       If[relPath == "", Continue[]];
@@ -457,7 +237,6 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
         FileNameJoin[{baseDir, relPath <> ".png"}],
         FileNameJoin[{baseDir, relPath <> ".jpg"}],
         FileNameJoin[{baseDir, relPath <> ".jpeg"}],
-        FileNameJoin[{baseDir, relPath <> ".exr"}],
         FileNameJoin[{baseDir, relPath <> ".tif"}],
         FileNameJoin[{baseDir, relPath <> ".tiff"}]
       }, FileExistsQ[#] &, None];
@@ -479,8 +258,12 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
         rgb = rawData[[All, All, 1 ;; 3]];
         If[whiteBg,
           rgb = rgb * alpha + (1.0 - alpha);
-        ];,
-        rgb = If[Length[Dimensions[rawData]] == 3, rawData[[All, All, 1 ;; 3]], ArrayReshape[rawData, {h, w, 3}]];
+        ];
+        ,
+        rgb = If[Length[Dimensions[rawData]] == 3,
+          rawData[[All, All, 1 ;; 3]],
+          ArrayReshape[rawData, {h, w, 3}]
+        ];
       ];
       rgb = Developer`ToPackedArray @ N[Clip[rgb, {0.0, 1.0}]];
 
@@ -495,7 +278,6 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
       c2w = Lookup[frame, "transform_matrix", None];
       If[!MatrixQ[c2w, NumericQ] || Dimensions[c2w] =!= {4, 4}, Continue[]];
       c2w = Developer`ToPackedArray[N[c2w]];
-      w2c = NeRFToRenderManTransform[c2w];
 
       fov = Which[
         KeyExistsQ[frame, "camera_angle_x"] && NumericQ[frame["camera_angle_x"]],
@@ -513,8 +295,7 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
       ];
 
       AppendTo[views, <|
-        "CameraMatrix" -> w2c,
-        "NeRFMatrix" -> c2w,
+        "CameraMatrix" -> c2w,
         "FOV" -> fov,
         "Dimensions" -> {w, h},
         "RGB" -> rgb,
@@ -532,7 +313,7 @@ LoadNeRFDataset[pathOrDir_String, opts : OptionsPattern[]] := Module[{
 ];
 
 (* ========================================================================= *)
-(* 5. Standard NeRF Dataset Exporter (transforms.json + PNG images)           *)
+(* 3. Standard NeRF Dataset Exporter (transforms.json + PNG images)          *)
 (* ========================================================================= *)
 
 Options[ExportNeRFDataset] = {
@@ -562,7 +343,7 @@ ExportNeRFDataset[views_List, outputDir_String, opts : OptionsPattern[]] := Modu
 
   v1 = First[views];
   {w, h} = Lookup[v1, "Dimensions", {512, 512}];
-  fovDeg = N @ Lookup[v1, "FOV", 48.0];
+  fovDeg = N @ Lookup[v1, "FOV", 50.0];
   fovRad = fovDeg * Degree;
   flX = N[(w / 2.0) / Tan[fovRad / 2.0]];
   flY = flX;
@@ -594,10 +375,7 @@ ExportNeRFDataset[views_List, outputDir_String, opts : OptionsPattern[]] := Modu
           Module[{
             v = splitViews[[idx]], c2w, relPath, imgFile, rgbArr, alphaArr, imgObj
           },
-            c2w = If[KeyExistsQ[v, "NeRFMatrix"] && MatrixQ[v["NeRFMatrix"], NumericQ],
-              v["NeRFMatrix"],
-              RenderManToNeRFTransform[v["CameraMatrix"]]
-            ];
+            c2w = v["CameraMatrix"];
 
             relPath = If[exportImgs,
               imgFile = FileNameJoin[{splitSubDir, "frame_" <> IntegerString[idx - 1, 10, 5] <> "." <> ToLowerCase[imgFmt]}];
@@ -672,45 +450,30 @@ ExportNeRFDataset[views_List, outputDir_String, opts : OptionsPattern[]] := Modu
 ];
 
 (* ========================================================================= *)
-(* 6. Ray Generation & Sampling (Auto-detecting RenderMan w2c vs NeRF c2w)    *)
+(* 4. Ray Generation & Stratified Sampling (Standard NeRF c2w Convention)    *)
 (* ========================================================================= *)
 
 Options[GenerateCameraRays] = {
-  "FOV" -> 48.0,
+  "FOV" -> 50.0,
   "AspectRatio" -> 1.0,
-  "PixelCoords" -> All,
-  "Convention" -> Automatic
+  "PixelCoords" -> All
 };
 
 GenerateCameraRays[matrix_?MatrixQ, {w_Integer, h_Integer}, opts : OptionsPattern[]] := Module[{
-  fov = OptionValue["FOV"], ar = OptionValue["AspectRatio"], pixelCoords = OptionValue["PixelCoords"],
-  conv = OptionValue["Convention"],
-  inv, pos, rx, ry, rz, hw, hh, uvList, nRays, uCoords, vCoords, ndcX, ndcY, rawDirs, norms, dirs, origins,
-  isNeRFC2W
+  fov = OptionValue["FOV"],
+  ar = OptionValue["AspectRatio"],
+  pixelCoords = OptionValue["PixelCoords"],
+  pos, rx, ry, rz, hw, hh, uvList, nRays, uCoords, vCoords, ndcX, ndcY, rawDirs, norms, dirs, origins
 },
-  If[!NumericQ[fov] || fov <= 0, fov = 48.0];
+  If[!NumericQ[fov] || fov <= 0, fov = 50.0];
   If[!NumericQ[ar] || ar <= 0, ar = N[w / h]];
 
-  isNeRFC2W = Which[
-    conv === "NeRF", True,
-    conv === "RenderMan", False,
-    True,
-      Abs[matrix[[4, 1]]] < 1*^-5 && Abs[matrix[[4, 2]]] < 1*^-5 && 
-      Abs[matrix[[4, 3]]] < 1*^-5 && Abs[matrix[[4, 4]] - 1.0] < 1*^-5
-  ];
-
-  If[isNeRFC2W,
-    pos = Developer`ToPackedArray[N[matrix[[1 ;; 3, 4]]]];
-    rx  = Developer`ToPackedArray[Normalize[N[matrix[[1 ;; 3, 1]]]]];
-    ry  = Developer`ToPackedArray[Normalize[N[matrix[[1 ;; 3, 2]]]]];
-    rz  = Developer`ToPackedArray[-Normalize[N[matrix[[1 ;; 3, 3]]]]];
-    ,
-    inv = Inverse[matrix];
-    pos = Developer`ToPackedArray[N[inv[[4, 1 ;; 3]]]];
-    rx  = Developer`ToPackedArray[Normalize[N[inv[[1, 1 ;; 3]]]]];
-    ry  = Developer`ToPackedArray[Normalize[N[inv[[2, 1 ;; 3]]]]];
-    rz  = Developer`ToPackedArray[Normalize[N[inv[[3, 1 ;; 3]]]]];
-  ];
+  (* Standard NeRF / OpenGL 4x4 camera-to-world (c2w) matrix:
+     Col 1: Right (+X), Col 2: Up (+Y), Col 3: Back (+Z, -Look), Col 4: Origin *)
+  pos = Developer`ToPackedArray[N[matrix[[1 ;; 3, 4]]]];
+  rx  = Developer`ToPackedArray[Normalize[N[matrix[[1 ;; 3, 1]]]]];
+  ry  = Developer`ToPackedArray[Normalize[N[matrix[[1 ;; 3, 2]]]]];
+  rz  = Developer`ToPackedArray[-Normalize[N[matrix[[1 ;; 3, 3]]]]];
 
   hw = Tan[fov * Degree / 2.0];
   hh = hw / ar;
@@ -796,7 +559,7 @@ SampleRaysStratified[origins_List, directions_List, numSamples_Integer, {tNear_?
 ];
 
 (* ========================================================================= *)
-(* 7. High-Performance In-Memory Ray Pool                                    *)
+(* 5. High-Performance In-Memory Ray Pool                                    *)
 (* ========================================================================= *)
 
 Options[PrecomputeNeRFLiteRayPool] = {
@@ -805,12 +568,12 @@ Options[PrecomputeNeRFLiteRayPool] = {
 
 PrecomputeNeRFLiteRayPool[viewsInput_, opts : OptionsPattern[]] := Module[{
   views = Which[
-    ListQ[viewsInput] && AssociationQ[First[viewsInput, None]], viewsInput,
-    StringQ[viewsInput] && (StringEndsQ[ToLowerCase[viewsInput], ".json"] || (DirectoryQ[viewsInput] && Length[FileNames["transforms*.json", viewsInput]] > 0)),
+    ListQ[viewsInput] && AssociationQ[First[viewsInput, None]],
+      viewsInput,
+    StringQ[viewsInput],
       LoadNeRFDataset[viewsInput],
-    StringQ[viewsInput] || (ListQ[viewsInput] && StringQ[First[viewsInput, None]]),
-      LoadRenderManEXRViews[viewsInput],
-    True, {}
+    True,
+      {}
   ],
   parallelOpt = OptionValue["Parallel"],
   useParallel, viewProcessFn, viewPools,

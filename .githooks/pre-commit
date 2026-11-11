@@ -1,150 +1,116 @@
-#!/usr/bin/env python3
-"""
-Git pre-commit hook and version management utility for Wolfram Language paclets.
-Automatically bumps the build number (Maj.Min.Build) on commit and syncs:
-  - PacletInfo.wl ("Version" -> "X.Y.Z", "BuildNumber" -> "Z")
-  - version.json (major_version, minor_version, build_number, date)
-  - Kernel/<PacletName>.wl ($<PacletName>Version = "X.Y.Z";)
-  - Tests/<PacletName>.wlt ($<PacletName>Version === "X.Y.Z")
-"""
+#!/usr/bin/env wolframscript
+(* ::Package:: *)
+(* Git pre-commit hook and version management utility for WLNeRFLite.
+   Automatically bumps the build number (Maj.Min.Build) on commit and syncs:
+     - PacletInfo.wl ("Version" -> "X.Y.Z", "BuildNumber" -> "Z")
+     - version.json (major_version, minor_version, build_number, date)
+     - Kernel/init.wl ($WLNeRFLiteVersion = "X.Y.Z";)
+     - Tests/NeRFLite.wlt ($WLNeRFLiteVersion === "X.Y.Z")
+*)
 
-import os
-import sys
-import re
-import json
-import subprocess
+If[Environment["SKIP_VERSION_BUMP"] === "1", Exit[0]];
 
-if os.environ.get("SKIP_VERSION_BUMP") == "1":
-    sys.exit(0)
+scriptFile = Which[
+  StringQ[$InputFileName] && $InputFileName =!= "", $InputFileName,
+  ListQ[$ScriptCommandLine] && Length[$ScriptCommandLine] > 0, First[$ScriptCommandLine],
+  True, ".githooks/pre-commit"
+];
 
-def find_repo_root(start_dir):
-    d = os.path.abspath(start_dir)
-    while d != "/":
-        if os.path.exists(os.path.join(d, "PacletInfo.wl")):
-            return d
-        d = os.path.dirname(d)
-    return None
+repoRoot = DirectoryName[ExpandFileName[scriptFile], 2];
+pacletFile = FileNameJoin[{repoRoot, "PacletInfo.wl"}];
+If[!FileExistsQ[pacletFile], Exit[0]];
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-repo_root = find_repo_root(script_dir)
-if not repo_root:
-    sys.exit(0)
+isManual = AnyTrue[Rest[$ScriptCommandLine], MemberQ[{"--bump", "--force", "-f"}, #] &];
 
-# Clean git environment so submodule or parent git calls do not interfere
-clean_env = os.environ.copy()
-for k in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR"]:
-    clean_env.pop(k, None)
+If[!isManual,
+  stagedOut = Quiet @ Check[
+    RunProcess[{"git", "diff", "--cached", "--name-only"}, "StandardOutput", ProcessDirectory -> repoRoot],
+    ""
+  ];
+  stagedFiles = Select[StringSplit[StringTrim[stagedOut], "\n"], StringLength[#] > 0 &];
+  nonVersionStaged = Select[
+    stagedFiles,
+    !(StringEndsQ[#, "PacletInfo.wl"] || StringEndsQ[#, "version.json"] || StringStartsQ[#, ".githooks/"]) &
+  ];
+  If[Length[nonVersionStaged] == 0, Exit[0]];
+];
 
-paclet_info = os.path.join(repo_root, "PacletInfo.wl")
-is_manual = any(arg in sys.argv for arg in ["--force", "-f", "--bump"])
+content = Import[pacletFile, "Text"];
+verMatch = StringCases[
+  content,
+  RegularExpression["\"Version\"\\s*->\\s*\"(\\d+)\\.(\\d+)(?:\\.(\\d+))?\""] :> {"$1", "$2", "$3"}
+];
+If[Length[verMatch] == 0, Exit[0]];
 
-if not is_manual:
-    try:
-        staged = subprocess.check_output(
-            ["git", "diff", "--cached", "--name-only"], cwd=repo_root, env=clean_env
-        ).decode().splitlines()
-    except Exception:
-        staged = []
+{majStr, minStr, bldStr} = First[verMatch];
+major = ToExpression[majStr];
+minor = ToExpression[minStr];
+curBuild = If[StringLength[bldStr] > 0, ToExpression[bldStr], 0];
 
-    if not staged:
-        sys.exit(0)
+revCountStr = Quiet @ Check[
+  StringTrim @ RunProcess[{"git", "rev-list", "--count", "HEAD"}, "StandardOutput", ProcessDirectory -> repoRoot],
+  "0"
+];
+gitBuild = If[StringMatchQ[revCountStr, DigitCharacter ..], ToExpression[revCountStr] + 1, 1];
+buildNum = Max[gitBuild, curBuild + 1];
+verStr = ToString[major] <> "." <> ToString[minor] <> "." <> ToString[buildNum];
 
-    non_version_staged = [
-        f for f in staged
-        if not (f.endswith("PacletInfo.wl") or f.endswith("version.json") or f.startswith(".githooks/"))
-    ]
-    if not non_version_staged:
-        sys.exit(0)
+(* 1. Update PacletInfo.wl *)
+newContent = StringReplace[
+  content,
+  {
+    RegularExpression["\"Version\"\\s*->\\s*\"[^\"]+\""] -> "\"Version\" -> \"" <> verStr <> "\"",
+    RegularExpression["\"BuildNumber\"\\s*->\\s*\"[^\"]+\""] -> "\"BuildNumber\" -> \"" <> ToString[buildNum] <> "\""
+  }
+];
+Export[pacletFile, newContent <> "\n", "Text"];
+Quiet @ RunProcess[{"git", "add", pacletFile}, ProcessDirectory -> repoRoot];
 
-with open(paclet_info, "r", encoding="utf-8") as f:
-    content = f.read()
+(* 2. Update version.json *)
+versionJsonPath = FileNameJoin[{repoRoot, "version.json"}];
+dateStr = Quiet @ Check[
+  StringTrim @ RunProcess[{"date"}, "StandardOutput", ProcessDirectory -> repoRoot],
+  DateString[]
+];
+vJsonText = StringJoin[
+  "{\n",
+  "  \"major_version\": ", ToString[major], ",\n",
+  "  \"minor_version\": ", ToString[minor], ",\n",
+  "  \"revision_number\": 0,\n",
+  "  \"build_number\": ", ToString[buildNum], ",\n",
+  "  \"date\": \"", dateStr, "\"\n",
+  "}\n"
+];
+Export[versionJsonPath, vJsonText, "Text"];
+Quiet @ RunProcess[{"git", "add", versionJsonPath}, ProcessDirectory -> repoRoot];
 
-m_name = re.search(r'"Name"\s*->\s*"([^"]+)"', content)
-paclet_name = m_name.group(1) if m_name else os.path.basename(repo_root)
+(* 3. Update Kernel/init.wl *)
+initPath = FileNameJoin[{repoRoot, "Kernel", "init.wl"}];
+If[FileExistsQ[initPath],
+  initText = Import[initPath, "Text"];
+  newInitText = StringReplace[
+    initText,
+    RegularExpression["(\\$WLNeRFLiteVersion\\s*=\\s*\")[^\"]+(\";)"] :> "$1" <> verStr <> "$2"
+  ];
+  If[newInitText =!= initText,
+    Export[initPath, newInitText <> "\n", "Text"];
+    Quiet @ RunProcess[{"git", "add", initPath}, ProcessDirectory -> repoRoot];
+  ];
+];
 
-m_ver = re.search(r'"Version"\s*->\s*"(\d+)\.(\d+)(?:\.(\d+))?"', content)
-if not m_ver:
-    sys.exit(0)
+(* 4. Update Tests/NeRFLite.wlt *)
+testPath = FileNameJoin[{repoRoot, "Tests", "NeRFLite.wlt"}];
+If[FileExistsQ[testPath],
+  testText = Import[testPath, "Text"];
+  newTestText = StringReplace[
+    testText,
+    RegularExpression["(\\$WLNeRFLiteVersion\\s*===\\s*\")[^\"]+(\")"] :> "$1" <> verStr <> "$2"
+  ];
+  If[newTestText =!= testText,
+    Export[testPath, newTestText <> "\n", "Text"];
+    Quiet @ RunProcess[{"git", "add", testPath}, ProcessDirectory -> repoRoot];
+  ];
+];
 
-major = int(m_ver.group(1))
-minor = int(m_ver.group(2))
-current_build = int(m_ver.group(3)) if m_ver.group(3) else 0
-
-try:
-    count = int(subprocess.check_output(
-        ["git", "rev-list", "--count", "HEAD"], cwd=repo_root, env=clean_env
-    ).decode().strip())
-    git_build = count + 1
-except Exception:
-    git_build = 1
-
-build_num = max(git_build, current_build + 1)
-ver_str = f"{major}.{minor}.{build_num}"
-
-# 1. Update PacletInfo.wl
-ver_pattern = r'"Version"\s*->\s*"(\d+)\.(\d+)(?:\.\d+)?"'
-ver_repl = f'"Version" -> "{major}.{minor}.{build_num}"'
-new_content = re.sub(ver_pattern, ver_repl, content)
-
-if '"BuildNumber"' in new_content:
-    new_content = re.sub(r'"BuildNumber"\s*->\s*"[^"]*"', f'"BuildNumber" -> "{build_num}"', new_content)
-else:
-    new_content = re.sub(r'("Version"\s*->\s*"[^"]*",)', rf'\1\n    "BuildNumber" -> "{build_num}",', new_content)
-
-if new_content != content or not os.path.exists(os.path.join(repo_root, "version.json")):
-    with open(paclet_info, "w", encoding="utf-8") as f:
-        f.write(new_content)
-    subprocess.run(["git", "add", paclet_info], cwd=repo_root, env=clean_env)
-
-# 2. Update version.json
-version_json = os.path.join(repo_root, "version.json")
-try:
-    now_str = subprocess.check_output(["date"], cwd=repo_root, env=clean_env).decode().strip()
-except Exception:
-    now_str = ""
-
-vdata = {
-    "major_version": major,
-    "minor_version": minor,
-    "revision_number": 0,
-    "build_number": int(build_num),
-    "date": now_str
-}
-with open(version_json, "w", encoding="utf-8") as vf:
-    json.dump(vdata, vf, indent=2)
-    vf.write("\n")
-subprocess.run(["git", "add", version_json], cwd=repo_root, env=clean_env)
-
-# 3. Update Kernel version symbol if present
-kernel_dir = os.path.join(repo_root, "Kernel")
-if os.path.exists(kernel_dir):
-    for kf_name in os.listdir(kernel_dir):
-        if kf_name.endswith(".wl"):
-            kf_path = os.path.join(kernel_dir, kf_name)
-            with open(kf_path, "r", encoding="utf-8") as kf:
-                k_text = kf.read()
-            k_pat = rf'(\${paclet_name}Version\s*=\s*")[^"]+(";)'
-            if re.search(k_pat, k_text):
-                new_k_text = re.sub(k_pat, rf'\g<1>{ver_str}\g<2>', k_text)
-                if new_k_text != k_text:
-                    with open(kf_path, "w", encoding="utf-8") as kf:
-                        kf.write(new_k_text)
-                    subprocess.run(["git", "add", kf_path], cwd=repo_root, env=clean_env)
-
-# 4. Update Tests version check if present
-tests_dir = os.path.join(repo_root, "Tests")
-if os.path.exists(tests_dir):
-    for tf_name in os.listdir(tests_dir):
-        if tf_name.endswith(".wlt"):
-            tf_path = os.path.join(tests_dir, tf_name)
-            with open(tf_path, "r", encoding="utf-8") as tf:
-                t_text = tf.read()
-            t_pat = rf'(\${paclet_name}Version\s*===\s*")[^"]+(")'
-            if re.search(t_pat, t_text):
-                new_t_text = re.sub(t_pat, rf'\g<1>{ver_str}\g<2>', t_text)
-                if new_t_text != t_text:
-                    with open(tf_path, "w", encoding="utf-8") as tf:
-                        tf.write(new_t_text)
-                    subprocess.run(["git", "add", tf_path], cwd=repo_root, env=clean_env)
-
-print(f"[hook] Bumped {paclet_name}: Version -> \"{ver_str}\" (Build {build_num})")
+Print["[hook] Bumped WLNeRFLite: Version -> \"", verStr, "\" (Build ", buildNum, ")"];
+Exit[0];

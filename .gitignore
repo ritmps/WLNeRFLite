@@ -4,19 +4,19 @@
 *~
 *.wlnet
 *.wxf
+*.mx
+*.paclet
+paclets/
 .DS_Store
 
-# Output directories & caches
+# Output directories, archives & local data caches
+archive/
 checkpoints/
 output/
 renders/
 cache/
 __pycache__/
 .cache/
+.agent-scratch/
 *.log
 data/
-
-# NeRF data caches (keep scripts and tests, ignore raw bulk renders)
-*.exr
-*.npy
-*.npz

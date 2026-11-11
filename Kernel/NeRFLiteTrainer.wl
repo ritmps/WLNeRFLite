@@ -16,7 +16,7 @@ Options[CreateNeRFLiteBatchGenerator] = Join[
   {
     "BatchSize" -> 1024,
     "NumSamples" -> 32,
-    "RayBounds" -> {3.0, 10.0},
+    "RayBounds" -> {2.0, 6.0},
     "Perturb" -> True,
     "ViewsPerBatch" -> Automatic,
     "SampleForegroundRatio" -> 0.0,
@@ -24,8 +24,7 @@ Options[CreateNeRFLiteBatchGenerator] = Join[
     "PrecomputeRays" -> True,
     "Parallel" -> Automatic
   },
-  Options[LoadNeRFDataset],
-  Options[LoadRenderManEXRViews]
+  Options[LoadNeRFDataset]
 ];
 
 CreateNeRFLiteBatchGenerator[viewsOrPoolInput_, opts : OptionsPattern[]] := Module[{
@@ -49,19 +48,17 @@ CreateNeRFLiteBatchGenerator[viewsOrPoolInput_, opts : OptionsPattern[]] := Modu
 
   If[isPool,
     pool = viewsOrPoolInput;,
-    (* Input is views or paths *)
     views = Which[
       ListQ[viewsOrPoolInput] && AssociationQ[First[viewsOrPoolInput, None]],
         viewsOrPoolInput,
-      StringQ[viewsOrPoolInput] && (StringEndsQ[ToLowerCase[viewsOrPoolInput], ".json"] || (DirectoryQ[viewsOrPoolInput] && Length[FileNames["transforms*.json", viewsOrPoolInput]] > 0)),
+      StringQ[viewsOrPoolInput],
         LoadNeRFDataset[viewsOrPoolInput, Sequence @@ FilterRules[{opts}, Options[LoadNeRFDataset]]],
-      StringQ[viewsOrPoolInput] || (ListQ[viewsOrPoolInput] && StringQ[First[viewsOrPoolInput, None]]),
-        LoadRenderManEXRViews[viewsOrPoolInput, Sequence @@ FilterRules[{opts}, Options[LoadRenderManEXRViews]]],
-      True, {}
+      True,
+        {}
     ];
     If[FailureQ[views] || Length[views] == 0,
       Return[Failure["EmptyViewsList", <|
-        "Message" -> "No views available to create batch generator. Ensure input paths match existing NeRF datasets or RenderMan EXR files.",
+        "Message" -> "No views available to create batch generator. Ensure input path points to a valid NeRF dataset.",
         "Input" -> viewsOrPoolInput
       |>]]
     ];
@@ -209,7 +206,7 @@ Options[TrainNeRFLiteModel] = Join[
     "BatchSize" -> 1024,
     "MaxTrainingRounds" -> 2000,
     "LearningRate" -> 5*^-4,
-    "TargetDevice" -> "GPU",
+    "TargetDevice" -> Automatic,
     "Method" -> "ADAM",
     "TrainingProgressReporting" -> Automatic,
     "ProgressReporting" -> Automatic,
@@ -226,12 +223,13 @@ TrainNeRFLiteModel[inputNet_NetGraph, viewsOrGen_, opts : OptionsPattern[{TrainN
   batchSize = OptionValue["BatchSize"],
   maxRounds = OptionValue["MaxTrainingRounds"],
   lr = OptionValue["LearningRate"],
-  device = OptionValue["TargetDevice"],
+  deviceOpt = OptionValue["TargetDevice"],
   methodOpt = OptionValue["Method"],
   progReport = Replace[OptionValue["TrainingProgressReporting"], Automatic :> OptionValue["ProgressReporting"]],
   ckptDir = OptionValue["CheckpointDirectory"],
   ckptInterval = OptionValue["CheckpointInterval"],
   valGen = OptionValue["ValidationGenerator"],
+  resolvedDevice,
   netTrainOpts = <||>,
   baseNet = inputNet,
   trainNet, trainGen, trained
@@ -262,15 +260,22 @@ TrainNeRFLiteModel[inputNet_NetGraph, viewsOrGen_, opts : OptionsPattern[{TrainN
     Return[trainGen]
   ];
 
-  (* 3. Configure NetTrain options *)
+  (* 3. Resolve TargetDevice *)
+  resolvedDevice = Which[
+    deviceOpt === "MultiGPU" || deviceOpt === "AllGPU",
+      {"GPU", All},
+    deviceOpt === Automatic,
+      If[$SystemID === "MacOSX-ARM64", "CPU", "GPU"],
+    True,
+      deviceOpt
+  ];
+
+  (* 4. Configure NetTrain options *)
   netTrainOpts = <|
     LossFunction -> "Loss",
     BatchSize -> batchSize,
     MaxTrainingRounds -> maxRounds,
-    TargetDevice -> Which[
-      device === "MultiGPU" || device === "AllGPU", {"GPU", All},
-      True, device
-    ],
+    TargetDevice -> resolvedDevice,
     Method -> Which[
       MatchQ[methodOpt, {_String, ___}], methodOpt,
       StringQ[methodOpt], {methodOpt, "LearningRate" -> lr},
@@ -278,7 +283,7 @@ TrainNeRFLiteModel[inputNet_NetGraph, viewsOrGen_, opts : OptionsPattern[{TrainN
     ]
   |>;
 
-  (* 4. Intelligent Progress Reporting *)
+  (* 5. Intelligent Progress Reporting *)
   Module[{inNotebookQ = TrueQ[$Notebooks]},
     Which[
       progReport === None || progReport === False,
