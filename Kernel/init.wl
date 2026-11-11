@@ -18,13 +18,13 @@ BeginPackage["WLNeRFLite`", {
   "WLNeRFLite`Visualizer`"
 }];
 
+$WLNeRFLiteVersion::usage = "$WLNeRFLiteVersion gives the version string of the loaded WLNeRFLite paclet.";
+$WLNeRFLiteVersion = "1.2.17";
+
 (* Top-level aliases for user convenience *)
+DownloadNeRFDataset = WLNeRFLite`Data`DownloadNeRFDataset;
 LoadNeRFDataset = WLNeRFLite`Data`LoadNeRFDataset;
 ExportNeRFDataset = WLNeRFLite`Data`ExportNeRFDataset;
-RenderManToNeRFTransform = WLNeRFLite`Data`RenderManToNeRFTransform;
-NeRFToRenderManTransform = WLNeRFLite`Data`NeRFToRenderManTransform;
-LoadRenderManEXRView = WLNeRFLite`Data`LoadRenderManEXRView;
-LoadRenderManEXRViews = WLNeRFLite`Data`LoadRenderManEXRViews;
 GenerateCameraRays = WLNeRFLite`Data`GenerateCameraRays;
 SampleRaysStratified = WLNeRFLite`Data`SampleRaysStratified;
 PrecomputeNeRFLiteRayPool = WLNeRFLite`Data`PrecomputeNeRFLiteRayPool;
